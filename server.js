@@ -149,6 +149,44 @@ async function initWhatsApp() {
   }
 }
 
+let resolvedChannelJid = null;
+
+async function getChannelJid(input) {
+  if (!input) return null;
+  const cleaned = input.trim();
+  
+  // If already numeric newsletter JID
+  if (cleaned.endsWith('@newsletter') && /^\d+@newsletter$/.test(cleaned)) {
+    resolvedChannelJid = cleaned;
+    return cleaned;
+  }
+  if (/^\d+$/.test(cleaned)) {
+    resolvedChannelJid = `${cleaned}@newsletter`;
+    return resolvedChannelJid;
+  }
+
+  // Extract invite code from URL or string
+  const match = cleaned.match(/(?:whatsapp\.com\/channel\/)?([0-9A-Za-z_-]{20,})/);
+  const code = match ? match[1] : cleaned;
+
+  if (waSocket && typeof waSocket.newsletterMetadata === 'function') {
+    try {
+      log(`🔍 Resolving channel code "${code}" via Baileys...`);
+      const meta = await waSocket.newsletterMetadata('invite', code);
+      if (meta && meta.id) {
+        resolvedChannelJid = meta.id;
+        const role = meta.viewer_metadata?.role || 'UNKNOWN';
+        log(`📢 Channel found: "${meta.name || meta.thread_metadata?.name || 'Channel'}" | JID: ${meta.id} | Role: ${role}`);
+        return resolvedChannelJid;
+      }
+    } catch (err) {
+      log(`⚠️ Could not resolve channel "${code}": ${err.message}`);
+    }
+  }
+
+  return cleaned.includes('@') ? cleaned : `${cleaned}@newsletter`;
+}
+
 // ─── Send to WhatsApp Channel ─────────────────────────────────────────────
 async function sendToWhatsApp(caption) {
   if (!waSocket || waStatus !== 'connected') {
@@ -160,13 +198,13 @@ async function sendToWhatsApp(caption) {
   if (!channelId) return { success: false, reason: 'Channel ID set nahi hai' };
 
   try {
-    // WhatsApp Channel (Newsletter) format
-    const jid = channelId.includes('@') ? channelId : `${channelId}@newsletter`;
-    await waSocket.sendMessage(jid, { text: caption });
+    const jid = await getChannelJid(channelId);
+    log(`📤 Sending message to JID: ${jid}`);
+    const sentMsg = await waSocket.sendMessage(jid, { text: caption });
     totalSentToday++;
-    return { success: true };
+    return { success: true, jid, msgId: sentMsg?.key?.id };
   } catch (err) {
-    log(`Send error: ${err.message}`);
+    log(`❌ Send error: ${err.message}`);
     return { success: false, reason: err.message };
   }
 }
@@ -283,6 +321,22 @@ app.post('/api/send-custom', async (req, res) => {
   if (!message) return res.status(400).json({ success: false, error: 'Message required' });
   const result = await sendToWhatsApp(message);
   res.json(result);
+});
+
+app.get('/api/channel/info', async (req, res) => {
+  if (!waSocket || waStatus !== 'connected') {
+    return res.json({ connected: false, error: 'WhatsApp not connected' });
+  }
+  const settings = loadSettings();
+  const rawId = settings.channelId || '';
+  const match = rawId.match(/(?:whatsapp\.com\/channel\/)?([0-9A-Za-z_-]{20,})/);
+  const code = match ? match[1] : rawId;
+  try {
+    const meta = await waSocket.newsletterMetadata('invite', code);
+    res.json({ success: true, rawId, code, meta });
+  } catch (err) {
+    res.json({ success: false, rawId, code, error: err.message });
+  }
 });
 
 app.get('/api/settings', (req, res) => res.json(loadSettings()));
