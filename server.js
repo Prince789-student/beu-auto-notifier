@@ -5,7 +5,15 @@ const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 const qrcode = require('qrcode');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const pino = require('pino');
+
+// Baileys — No Chrome needed, works on any server!
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion
+} = require('@whiskeysockets/baileys');
 
 const app = express();
 app.use(express.json());
@@ -15,197 +23,180 @@ const PORT = process.env.PORT || 3001;
 const BEU_API_URL = process.env.BEU_API_URL || 'https://beu-bih.ac.in/backend/v1/notice/get-notice-board';
 const DATA_FILE = path.join(__dirname, 'data', 'notices.json');
 const SETTINGS_FILE = path.join(__dirname, 'data', 'settings.json');
+const AUTH_FOLDER = path.join(__dirname, 'auth_info');
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL_MINUTES || '2');
 
-// ─── Ensure data dir ───────────────────────────────────────────────────────
-if (!fs.existsSync(path.join(__dirname, 'data'))) {
-  fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
-}
+// ─── Ensure dirs ───────────────────────────────────────────────────────────
+[path.join(__dirname, 'data'), AUTH_FOLDER].forEach(d => {
+  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+});
 
 // ─── State ─────────────────────────────────────────────────────────────────
-let waClient = null;
-let waStatus = 'disconnected'; // connecting | qr_ready | connected | disconnected
+let waSocket = null;
+let waStatus = 'disconnected';
 let waQrDataUrl = null;
-let waQrCode = null;
 let lastCheckTime = null;
 let isChecking = false;
 let totalSentToday = 0;
 let serverStartTime = new Date();
+let reconnectTimer = null;
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 function loadNotices() {
-  try {
-    if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  } catch {}
+  try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch {}
   return {};
 }
-
-function saveNotices(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
-}
-
+function saveNotices(data) { fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8'); }
 function loadSettings() {
-  try {
-    if (fs.existsSync(SETTINGS_FILE)) return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
-  } catch {}
+  try { if (fs.existsSync(SETTINGS_FILE)) return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); } catch {}
   return { autoDispatch: process.env.AUTO_DISPATCH !== 'false', channelId: process.env.WHATSAPP_CHANNEL_ID || '' };
 }
-
-function saveSettings(data) {
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8');
-}
-
+function saveSettings(data) { fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8'); }
 function log(msg) {
   const t = new Date().toLocaleTimeString('en-IN', { hour12: false });
   console.log(`[${t}] ${msg}`);
 }
 
-// ─── WhatsApp Client ───────────────────────────────────────────────────────
-function initWhatsApp() {
-  log('📱 WhatsApp client initialize ho raha hai...');
+// ─── WhatsApp via Baileys (No Chrome!) ────────────────────────────────────
+async function initWhatsApp() {
+  if (waStatus === 'connecting' || waStatus === 'connected') return;
+
+  log('📱 WhatsApp (Baileys) initialize ho raha hai...');
   waStatus = 'connecting';
 
-  waClient = new Client({
-    authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '.wpp_session') }),
-    puppeteer: {
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    }
-  });
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
+    const { version } = await fetchLatestBaileysVersion();
 
-  waClient.on('qr', async (qr) => {
-    waStatus = 'qr_ready';
-    waQrCode = qr;
-    try {
-      waQrDataUrl = await qrcode.toDataURL(qr);
-    } catch {}
-    log('📷 QR code ready — dashboard pe scan karein');
-    // Also print to terminal
-    try {
-      require('qrcode-terminal').generate(qr, { small: true });
-    } catch {}
-  });
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      logger: pino({ level: 'silent' }), // Quiet logs
+      printQRInTerminal: false,
+      browser: ['BEU Notifier', 'Chrome', '1.0'],
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 60000,
+      keepAliveIntervalMs: 30000,
+      emitOwnEvents: false,
+      markOnlineOnConnect: false,
+    });
 
-  waClient.on('authenticated', () => {
-    log('🔐 WhatsApp authenticated!');
-    waStatus = 'connecting';
-    waQrCode = null;
-    waQrDataUrl = null;
-  });
+    waSocket = sock;
 
-  waClient.on('ready', () => {
-    log('✅ WhatsApp connected & ready!');
-    waStatus = 'connected';
-    waQrCode = null;
-    waQrDataUrl = null;
-  });
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+      // QR Code mila — frontend ko denge
+      if (qr) {
+        log('📷 QR code ready — dashboard pe scan karein!');
+        waStatus = 'qr_ready';
+        try {
+          waQrDataUrl = await qrcode.toDataURL(qr);
+        } catch (e) { log('QR generate error: ' + e.message); }
+      }
 
-  waClient.on('disconnected', (reason) => {
-    log(`❌ WhatsApp disconnected: ${reason}`);
-    waStatus = 'disconnected';
-    waClient = null;
-  });
+      if (connection === 'open') {
+        log('✅ WhatsApp connected!');
+        waStatus = 'connected';
+        waQrDataUrl = null;
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      }
 
-  waClient.initialize().catch(err => {
+      if (connection === 'close') {
+        const code = lastDisconnect?.error?.output?.statusCode;
+        const shouldReconnect = code !== DisconnectReason.loggedOut;
+        log(`⚠️ WhatsApp disconnected (code: ${code}) — reconnect: ${shouldReconnect}`);
+        waStatus = 'disconnected';
+        waSocket = null;
+        waQrDataUrl = null;
+
+        if (shouldReconnect) {
+          log('🔄 15 second baad reconnect karega...');
+          reconnectTimer = setTimeout(initWhatsApp, 15000);
+        } else {
+          log('🚪 Logged out — auth folder clear kar raha hai...');
+          fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
+          fs.mkdirSync(AUTH_FOLDER, { recursive: true });
+        }
+      }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+  } catch (err) {
     log(`❌ WhatsApp init error: ${err.message}`);
     waStatus = 'disconnected';
-  });
+    waSocket = null;
+    reconnectTimer = setTimeout(initWhatsApp, 20000);
+  }
 }
 
-// ─── Send WhatsApp Message ─────────────────────────────────────────────────
-async function sendToWhatsApp(caption, channelId) {
-  if (!waClient || waStatus !== 'connected') {
+// ─── Send to WhatsApp Channel ─────────────────────────────────────────────
+async function sendToWhatsApp(caption) {
+  if (!waSocket || waStatus !== 'connected') {
     return { success: false, reason: 'WhatsApp not connected' };
   }
 
   const settings = loadSettings();
-  const target = channelId || settings.channelId;
-  if (!target) {
-    return { success: false, reason: 'Channel ID set nahi hai' };
-  }
+  const channelId = settings.channelId;
+  if (!channelId) return { success: false, reason: 'Channel ID set nahi hai' };
 
   try {
-    // Format: channel ID as WhatsApp chat ID
-    const chatId = target.includes('@') ? target : `${target}@newsletter`;
-    await waClient.sendMessage(chatId, caption);
+    // WhatsApp Channel (Newsletter) format
+    const jid = channelId.includes('@') ? channelId : `${channelId}@newsletter`;
+    await waSocket.sendMessage(jid, { text: caption });
     totalSentToday++;
     return { success: true };
   } catch (err) {
+    log(`Send error: ${err.message}`);
     return { success: false, reason: err.message };
   }
 }
 
 // ─── BEU Notice Checker ────────────────────────────────────────────────────
 async function checkAndBroadcast(forceAll = false) {
-  if (isChecking) { log('⏳ Already checking, skip...'); return { skipped: true }; }
-
+  if (isChecking) return { skipped: true };
   isChecking = true;
   lastCheckTime = new Date().toISOString();
-  log(`🔍 BEU notices check kar raha hai...`);
+  log('🔍 BEU check chal raha hai...');
 
   const settings = loadSettings();
   const localCache = loadNotices();
-  let newCount = 0;
-  let sentCount = 0;
-  const results = [];
+  let newCount = 0, sentCount = 0;
 
   try {
     const res = await axios.get(BEU_API_URL, { timeout: 20000 });
-    const rawNotices = Array.isArray(res.data) ? res.data : [];
+    const raw = Array.isArray(res.data) ? res.data : [];
+    log(`📋 ${raw.length} notices BEU se mili`);
 
-    log(`📋 ${rawNotices.length} notices mili BEU se`);
-
-    for (const n of rawNotices.slice(0, 15)) {
+    for (const n of raw.slice(0, 15)) {
       const id = String(n.id);
-      const existing = localCache[id];
-      const isNew = !existing || forceAll;
+      if (localCache[id] && !forceAll) continue;
 
+      newCount++;
       const title = (n.board || 'BEU Notice').trim();
-      const pdfLink = n.link ? `https://beu-bih.ac.in/backend/${encodeURIComponent(n.link.trim())}` : '';
+      const link = n.link ? `https://beu-bih.ac.in/backend/${encodeURIComponent(n.link.trim())}` : '';
       const date = n.noticedate || new Date().toISOString().split('T')[0];
       const isUrgent = n.isimportant === 1;
+      const caption = buildCaption({ title, pdfLink: link, date, isUrgent });
 
-      if (isNew) {
-        newCount++;
-        log(`🆕 Nayi notice: ${title}`);
+      localCache[id] = { id, title, pdfLink: link, date, isUrgent, caption, dispatched: false, createdAt: new Date().toISOString() };
+      saveNotices(localCache);
 
-        // Build WhatsApp caption
-        const caption = buildCaption({ title, pdfLink, date, isUrgent });
-
-        // Save to cache
-        localCache[id] = {
-          id, title, pdfLink, date, isUrgent,
-          caption,
-          dispatched: false,
-          createdAt: new Date().toISOString()
-        };
+      if (settings.autoDispatch && settings.channelId) {
+        const r = await sendToWhatsApp(caption);
+        localCache[id].dispatched = r.success;
+        localCache[id].dispatchedAt = new Date().toISOString();
         saveNotices(localCache);
-
-        // Auto dispatch
-        if (settings.autoDispatch && settings.channelId) {
-          const sendResult = await sendToWhatsApp(caption, settings.channelId);
-          localCache[id].dispatched = sendResult.success;
-          localCache[id].dispatchedAt = new Date().toISOString();
-          saveNotices(localCache);
-
-          if (sendResult.success) {
-            sentCount++;
-            log(`✅ Sent to WhatsApp: ${title}`);
-          } else {
-            log(`⚠️ WhatsApp send failed: ${sendResult.reason}`);
-          }
-        }
-
-        results.push({ id, title, isNew: true, dispatched: localCache[id].dispatched });
+        if (r.success) { sentCount++; log(`✅ Sent: ${title}`); }
+        else log(`⚠️ Send failed: ${r.reason}`);
         await new Promise(r => setTimeout(r, 1500));
       }
     }
 
     log(`✅ Check done — ${newCount} new, ${sentCount} sent`);
-    return { success: true, newCount, sentCount, results };
+    return { success: true, newCount, sentCount };
 
   } catch (err) {
-    log(`❌ BEU check error: ${err.message}`);
+    log(`❌ BEU error: ${err.message}`);
     return { success: false, error: err.message };
   } finally {
     isChecking = false;
@@ -219,116 +210,62 @@ function buildCaption({ title, pdfLink, date, isUrgent }) {
     '',
     `📌 *${title}*`,
     `🗓️ Date: ${dateStr}`,
-    '',
-    pdfLink ? `📄 *Download PDF:*\n👉 ${pdfLink}` : '',
-    '',
-    '━━━━━━━━━━━━━━━━━━',
+    pdfLink ? `\n📄 *Download PDF:*\n👉 ${pdfLink}` : '',
+    '\n━━━━━━━━━━━━━━━━━━',
     '#BEU #BiharEngineering #Notice'
   ].filter(Boolean).join('\n');
 }
 
-// ─── Cron Job ──────────────────────────────────────────────────────────────
-const cronExpr = `*/${CHECK_INTERVAL} * * * *`;
-cron.schedule(cronExpr, () => {
-  log(`⏰ Cron: BEU auto-check (har ${CHECK_INTERVAL} min)`);
+// ─── Cron ──────────────────────────────────────────────────────────────────
+cron.schedule(`*/${CHECK_INTERVAL} * * * *`, () => {
+  log(`⏰ Auto check...`);
   checkAndBroadcast();
 });
 log(`✅ Cron scheduled: har ${CHECK_INTERVAL} minute`);
 
 // ─── API Routes ────────────────────────────────────────────────────────────
+app.get('/api/health', (req, res) => res.json({ ok: true }));
 
-// Health
-app.get('/api/health', (req, res) => {
-  res.json({
-    ok: true,
-    uptime: Math.floor((Date.now() - serverStartTime) / 1000),
-    waStatus,
-    lastCheckTime,
-    isChecking,
-    totalSentToday
-  });
-});
-
-// Status
 app.get('/api/status', (req, res) => {
-  const settings = loadSettings();
-  const notices = loadNotices();
-  const noticeList = Object.values(notices).filter(n => n.id);
+  const s = loadSettings();
+  const n = Object.values(loadNotices()).filter(x => x.id);
   res.json({
-    waStatus,
-    hasQr: !!waQrCode,
-    lastCheckTime,
-    isChecking,
-    totalSentToday,
-    autoDispatch: settings.autoDispatch,
-    channelId: settings.channelId ? '✓ Set' : '✗ Not set',
-    totalNotices: noticeList.length,
-    sentNotices: noticeList.filter(n => n.dispatched).length,
-    pendingNotices: noticeList.filter(n => !n.dispatched).length,
+    waStatus, hasQr: !!waQrDataUrl, lastCheckTime, isChecking,
+    totalSentToday, autoDispatch: s.autoDispatch,
+    channelId: s.channelId ? '✓ Set' : '✗ Not set',
+    totalNotices: n.length,
+    sentNotices: n.filter(x => x.dispatched).length,
+    pendingNotices: n.filter(x => !x.dispatched).length,
     checkIntervalMins: CHECK_INTERVAL
   });
 });
 
-// QR Code (for WhatsApp login)
 app.get('/api/qr', (req, res) => {
-  if (waQrDataUrl) {
-    res.json({ hasQr: true, qrDataUrl: waQrDataUrl });
-  } else {
-    res.json({ hasQr: false, waStatus });
-  }
+  if (waQrDataUrl) res.json({ hasQr: true, qrDataUrl: waQrDataUrl });
+  else res.json({ hasQr: false, waStatus });
 });
 
-// All notices
 app.get('/api/notices', (req, res) => {
-  const notices = loadNotices();
-  const list = Object.values(notices)
+  const list = Object.values(loadNotices())
     .filter(n => n.id)
     .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
     .slice(0, 50);
   res.json({ success: true, count: list.length, notices: list });
 });
 
-// Manual sync
 app.post('/api/sync', async (req, res) => {
-  const forceAll = req.body?.forceAll === true;
-  const result = await checkAndBroadcast(forceAll);
+  const result = await checkAndBroadcast(req.body?.forceAll === true);
   res.json(result);
 });
 
-// Send custom message to WhatsApp
 app.post('/api/send-custom', async (req, res) => {
-  const { message, title, pdfLink } = req.body || {};
+  const { message } = req.body || {};
   if (!message) return res.status(400).json({ success: false, error: 'Message required' });
-
-  const settings = loadSettings();
-  const caption = title
-    ? buildCaption({ title, pdfLink: pdfLink || '', date: new Date().toISOString(), isUrgent: false }) + '\n\n' + message
-    : message;
-
-  const result = await sendToWhatsApp(caption, settings.channelId);
+  const result = await sendToWhatsApp(message);
   res.json(result);
 });
 
-// Send a specific notice manually
-app.post('/api/send-notice/:id', async (req, res) => {
-  const notices = loadNotices();
-  const n = notices[req.params.id];
-  if (!n) return res.status(404).json({ success: false, error: 'Notice not found' });
-
-  const result = await sendToWhatsApp(n.caption || buildCaption(n));
-  if (result.success) {
-    n.dispatched = true;
-    n.dispatchedAt = new Date().toISOString();
-    notices[req.params.id] = n;
-    saveNotices(notices);
-  }
-  res.json(result);
-});
-
-// Get/Update settings
-app.get('/api/settings', (req, res) => {
-  res.json(loadSettings());
-});
+app.get('/api/settings', (req, res) => res.json(loadSettings()));
 
 app.post('/api/settings', (req, res) => {
   const current = loadSettings();
@@ -343,37 +280,32 @@ app.post('/api/settings', (req, res) => {
 app.post('/api/wa/connect', (req, res) => {
   if (waStatus === 'connected') return res.json({ success: true, message: 'Already connected' });
   initWhatsApp();
-  res.json({ success: true, message: 'WhatsApp initialization started — QR scan karein' });
+  res.json({ success: true, message: 'WhatsApp start ho raha hai — QR aane ka wait karo' });
 });
 
 app.post('/api/wa/disconnect', async (req, res) => {
-  if (waClient) {
-    try { await waClient.destroy(); } catch {}
-    waClient = null;
-  }
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (waSocket) { try { await waSocket.logout(); } catch {} waSocket = null; }
   waStatus = 'disconnected';
-  res.json({ success: true, message: 'WhatsApp disconnected' });
+  fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
+  fs.mkdirSync(AUTH_FOLDER, { recursive: true });
+  res.json({ success: true });
 });
 
-// Serve dashboard for all other routes
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // ─── Start ─────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  log(`🚀 BEU Auto Notifier server chalu hai: http://localhost:${PORT}`);
-  log(`📡 BEU check: har ${CHECK_INTERVAL} minute`);
-  log(`💬 WhatsApp: ${waStatus}`);
+  log(`🚀 Server: http://localhost:${PORT}`);
+  log(`📡 BEU auto-check: har ${CHECK_INTERVAL} min`);
 });
 
-// Auto-start WhatsApp if session exists
+// Auto-connect if session exists
 setTimeout(() => {
-  const sessionPath = path.join(__dirname, '.wpp_session');
-  if (fs.existsSync(sessionPath)) {
-    log('🔄 Purana WhatsApp session mila — auto-connect kar raha hai...');
+  if (fs.existsSync(AUTH_FOLDER) && fs.readdirSync(AUTH_FOLDER).length > 0) {
+    log('🔄 Purani session mili — WhatsApp auto-connect...');
     initWhatsApp();
   } else {
-    log('ℹ️ WhatsApp session nahi mila — dashboard se connect karein');
+    log('ℹ️ Dashboard se WhatsApp connect karein');
   }
-}, 1000);
+}, 2000);
