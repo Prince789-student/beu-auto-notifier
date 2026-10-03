@@ -1,0 +1,5 @@
+node_modules/
+.wpp_session/
+data/
+.env
+*.log

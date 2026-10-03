@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BEU Auto Notifier — WhatsApp Dashboard</title>
+  <meta name="description" content="Standalone BEU notification system — automatically sends new BEU notices to WhatsApp channel" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="header-brand">
+        <div class="brand-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.37 5.07L2 22l5.07-1.35C8.44 21.51 10.17 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2z" fill="var(--color-accent)" opacity="0.9"/>
+            <path d="M17 14.5c-.28-.14-1.65-.81-1.9-.9-.26-.09-.44-.14-.63.14-.19.28-.73.9-.9 1.08-.16.18-.33.2-.61.07-.28-.14-1.18-.44-2.25-1.39-.83-.74-1.39-1.66-1.55-1.94-.16-.28-.02-.43.12-.57.13-.13.28-.33.42-.49.14-.17.18-.28.28-.47.09-.19.04-.35-.02-.49-.07-.14-.63-1.52-.87-2.08-.23-.54-.46-.47-.63-.48-.16-.01-.35-.01-.54-.01-.18 0-.48.07-.74.35-.26.28-1 1-.97 2.43.02 1.44 1.05 2.83 1.19 3.02.14.19 2.05 3.13 4.98 4.39.7.3 1.24.48 1.67.61.7.22 1.34.19 1.84.12.56-.09 1.65-.67 1.88-1.32.23-.65.23-1.2.16-1.32-.07-.1-.26-.17-.54-.3z" fill="white"/>
+          </svg>
+        </div>
+        <div>
+          <span class="brand-name">BEU Auto Notifier</span>
+          <span class="brand-sub">WhatsApp Auto System</span>
+        </div>
+      </div>
+
+      <div class="header-center">
+        <div class="server-pill" id="serverPill">
+          <span class="pill-dot" id="pillDot"></span>
+          <span id="pillLabel">Connecting…</span>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <div class="header-clock" id="headerClock">--:--:--</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main class="layout">
+
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar">
+
+      <!-- System Status -->
+      <div class="card">
+        <div class="card-label">SYSTEM STATUS</div>
+        <ul class="status-list">
+          <li class="sl-item">
+            <span class="sl-icon">🖥️</span>
+            <span class="sl-name">Server</span>
+            <span class="sl-badge" id="st-server">—</span>
+          </li>
+          <li class="sl-item">
+            <span class="sl-icon">📱</span>
+            <span class="sl-name">WhatsApp</span>
+            <span class="sl-badge" id="st-wa">—</span>
+          </li>
+          <li class="sl-item">
+            <span class="sl-icon">📡</span>
+            <span class="sl-name">BEU Check</span>
+            <span class="sl-badge" id="st-cron">AUTO</span>
+          </li>
+          <li class="sl-item">
+            <span class="sl-icon">📤</span>
+            <span class="sl-name">Auto Send</span>
+            <span class="sl-badge" id="st-auto">—</span>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Cron Info -->
+      <div class="card">
+        <div class="card-label">AUTO CHECK</div>
+        <div class="cron-display">
+          <div class="cron-pulse" id="cronPulse"></div>
+          <div class="cron-info">
+            <div class="cron-main" id="cronInterval">Har 2 min</div>
+            <div class="cron-sub">24/7 background</div>
+          </div>
+        </div>
+        <div class="time-row">
+          <span class="tr-key">Last check</span>
+          <span class="tr-val" id="lastCheck">—</span>
+        </div>
+        <div class="time-row">
+          <span class="tr-key">Next check</span>
+          <span class="tr-val countdown" id="nextCheck">—</span>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="card">
+        <div class="card-label">STATS</div>
+        <div class="stats-2x2">
+          <div class="stat">
+            <div class="stat-n" id="stat-total">—</div>
+            <div class="stat-l">Total</div>
+          </div>
+          <div class="stat">
+            <div class="stat-n green" id="stat-sent">—</div>
+            <div class="stat-l">WA Sent</div>
+          </div>
+          <div class="stat">
+            <div class="stat-n amber" id="stat-pending">—</div>
+            <div class="stat-l">Pending</div>
+          </div>
+          <div class="stat">
+            <div class="stat-n" id="stat-today">0</div>
+            <div class="stat-l">Today Sent</div>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- CENTER PANELS -->
+    <div class="center">
+
+      <!-- PANEL: WhatsApp Setup -->
+      <section class="panel" id="panel-wa-setup">
+        <div class="panel-hd">
+          <div class="panel-hd-left">
+            <span class="ph-icon">📱</span>
+            <div>
+              <h2 class="ph-title">WhatsApp Connect</h2>
+              <p class="ph-desc">QR code scan karo aur WhatsApp auto-sender shuru karo</p>
+            </div>
+          </div>
+          <span class="wa-status-badge" id="waBadge">Disconnected</span>
+        </div>
+
+        <div class="wa-area" id="waArea">
+          <!-- QR or Connected state shown here by JS -->
+          <div class="wa-placeholder" id="waPlaceholder">
+            <div class="wa-icon-big">📱</div>
+            <p class="wa-msg">Connect button dabao aur QR scan karo</p>
+            <button class="btn btn-primary" id="btnWaConnect" onclick="connectWhatsApp()">
+              WhatsApp Connect Karo
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- PANEL: Settings -->
+      <section class="panel" id="panel-settings">
+        <div class="panel-hd">
+          <div class="panel-hd-left">
+            <span class="ph-icon">⚙️</span>
+            <div>
+              <h2 class="ph-title">Settings</h2>
+              <p class="ph-desc">WhatsApp Channel ID aur auto-dispatch configure karo</p>
+            </div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="saveSettings()">💾 Save</button>
+        </div>
+
+        <div class="settings-grid">
+          <div class="setting-row">
+            <div class="sr-info">
+              <div class="sr-label">WhatsApp Channel ID</div>
+              <div class="sr-desc">Channel ka ID (link mein jo number hota hai) ya phone number</div>
+            </div>
+            <input type="text" class="setting-input" id="channelIdInput" placeholder="e.g. 120363xxxxxxxxxx" />
+          </div>
+
+          <div class="setting-row">
+            <div class="sr-info">
+              <div class="sr-label">Auto Dispatch</div>
+              <div class="sr-desc">Nayi notice aane par automatically WhatsApp bhejo</div>
+            </div>
+            <label class="toggle" for="autoDispatchToggle">
+              <input type="checkbox" id="autoDispatchToggle" onchange="toggleAutoDispatch(this.checked)" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- PANEL: Manual Controls -->
+      <section class="panel">
+        <div class="panel-hd">
+          <div class="panel-hd-left">
+            <span class="ph-icon">⚡</span>
+            <div>
+              <h2 class="ph-title">Manual Controls</h2>
+              <p class="ph-desc">Abhi BEU check karo ya test message bhejo</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="action-card ac-green" id="btnSync" onclick="syncNow()">
+            <span class="ac-icon">🔄</span>
+            <span class="ac-title">BEU Check Now</span>
+            <span class="ac-desc">Abhi scan karo</span>
+          </button>
+          <button class="action-card ac-wa" id="btnTest" onclick="sendTestMsg()">
+            <span class="ac-icon">💬</span>
+            <span class="ac-title">Test Message</span>
+            <span class="ac-desc">WhatsApp pe test bhejo</span>
+          </button>
+          <button class="action-card ac-amber" onclick="window.open('https://beu-bih.ac.in', '_blank')">
+            <span class="ac-icon">🌐</span>
+            <span class="ac-title">BEU Website</span>
+            <span class="ac-desc">Official site kholo</span>
+          </button>
+        </div>
+
+        <div class="result-box" id="resultBox" style="display:none"></div>
+      </section>
+
+      <!-- PANEL: Custom Message -->
+      <section class="panel">
+        <div class="panel-hd">
+          <div class="panel-hd-left">
+            <span class="ph-icon">✍️</span>
+            <div>
+              <h2 class="ph-title">Custom Message Bhejo</h2>
+              <p class="ph-desc">Khud koi bhi message WhatsApp Channel pe bhejo</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-stack">
+          <div class="fg">
+            <label class="fl" for="msgTitle">Title (optional)</label>
+            <input type="text" id="msgTitle" class="fi" placeholder="e.g. Exam Form Notice 2026" />
+          </div>
+          <div class="fg">
+            <label class="fl" for="msgBody">Message *</label>
+            <textarea id="msgBody" class="ft" rows="4" placeholder="Apna message yahan likho… 🚨📌🗓️" oninput="updateCount()"></textarea>
+            <div class="char-row"><span id="msgCount">0</span> chars</div>
+          </div>
+          <div class="fg">
+            <label class="fl" for="msgLink">PDF Link (optional)</label>
+            <input type="url" id="msgLink" class="fi" placeholder="https://beu-bih.ac.in/notice/..." />
+          </div>
+          <button class="btn btn-primary btn-full" id="btnSendCustom" onclick="sendCustom()">
+            🚀 WhatsApp pe Bhejo
+          </button>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- RIGHT SIDEBAR: Notice Feed -->
+    <aside class="sidebar sidebar--right">
+      <div class="card feed-card">
+        <div class="feed-header">
+          <div class="card-label">LIVE NOTICES</div>
+          <span class="live-dot">● LIVE</span>
+        </div>
+        <div class="notice-list" id="noticeList">
+          <div class="notice-loading">
+            <div class="spinner"></div>
+            <span>Load ho raha hai…</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- TOASTS -->
+  <div class="toast-stack" id="toastStack"></div>
+
+  <!-- FOOTER PILL -->
+  <div class="footer-pill">
+    <span class="fp-dot"></span>
+    <span id="fpText">Server chal raha hai — Auto Mode ON</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

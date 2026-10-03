@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Auto Notification Command Center — BEU Apna College Bihar</title>
+  <meta name="description" content="BEU Auto Notification Admin Dashboard — WhatsApp, FCM Push, Browser Push notifications automatically, even while you sleep." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="site-header" id="top">
+    <div class="header-inner">
+      <div class="header-brand">
+        <div class="brand-icon" aria-hidden="true">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <circle cx="14" cy="14" r="13" stroke="var(--color-accent)" stroke-width="1.5"/>
+            <path d="M14 7v7l4 4" stroke="var(--color-accent)" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="14" cy="14" r="2" fill="var(--color-accent)"/>
+          </svg>
+        </div>
+        <div>
+          <span class="brand-name">AutoNotify</span>
+          <span class="brand-sub">BEU Command Center</span>
+        </div>
+      </div>
+      <div class="header-status" id="headerStatus">
+        <span class="status-dot" id="serverDot"></span>
+        <span class="status-label" id="serverLabel">Connecting…</span>
+      </div>
+      <div class="header-time" id="headerTime"></div>
+    </div>
+  </header>
+
+  <!-- MAIN WORKBENCH LAYOUT -->
+  <main class="workbench">
+
+    <!-- LEFT RAIL: System Status -->
+    <aside class="rail rail--left" id="statusRail">
+
+      <section class="rail-section">
+        <h2 class="rail-label">SYSTEM STATUS</h2>
+        <ul class="status-list" id="systemStatusList">
+          <li class="status-item">
+            <span class="si-icon">⚡</span>
+            <span class="si-name">Server</span>
+            <span class="si-badge badge--checking" id="st-server">—</span>
+          </li>
+          <li class="status-item">
+            <span class="si-icon">🤖</span>
+            <span class="si-name">Gemini AI</span>
+            <span class="si-badge badge--checking" id="st-ai">—</span>
+          </li>
+          <li class="status-item">
+            <span class="si-icon">📱</span>
+            <span class="si-name">WhatsApp Bot</span>
+            <span class="si-badge badge--checking" id="st-wa">—</span>
+          </li>
+          <li class="status-item">
+            <span class="si-icon">🔥</span>
+            <span class="si-name">Firebase FCM</span>
+            <span class="si-badge badge--checking" id="st-fcm">—</span>
+          </li>
+          <li class="status-item">
+            <span class="si-icon">🌐</span>
+            <span class="si-name">Browser Push</span>
+            <span class="si-badge badge--checking" id="st-browser">—</span>
+          </li>
+        </ul>
+      </section>
+
+      <section class="rail-section">
+        <h2 class="rail-label">CRON SCHEDULE</h2>
+        <div class="cron-card">
+          <div class="cron-icon">⏱</div>
+          <div class="cron-info">
+            <div class="cron-title">BEU Auto Sync</div>
+            <div class="cron-interval">Har 2 minute</div>
+          </div>
+          <div class="cron-status live" id="cronIndicator">LIVE</div>
+        </div>
+        <div class="cron-meta">
+          <span class="meta-key">Last Check:</span>
+          <span class="meta-val" id="lastCheckTime">—</span>
+        </div>
+        <div class="cron-meta">
+          <span class="meta-key">Next Check:</span>
+          <span class="meta-val" id="nextCheckTime">—</span>
+        </div>
+      </section>
+
+      <section class="rail-section">
+        <h2 class="rail-label">STATS</h2>
+        <div class="stats-grid">
+          <div class="stat-box">
+            <div class="stat-num" id="stat-notices">—</div>
+            <div class="stat-lbl">Total Notices</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-num accent" id="stat-sent">—</div>
+            <div class="stat-lbl">WA Sent</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-num" id="stat-ai">—</div>
+            <div class="stat-lbl">AI Done</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-num warn" id="stat-pending">—</div>
+            <div class="stat-lbl">Pending</div>
+          </div>
+        </div>
+      </section>
+
+    </aside>
+
+    <!-- CENTER: Main Control Panels -->
+    <div class="center-col">
+
+      <!-- PANEL 1: Auto Broadcast Control -->
+      <section class="panel" id="panel-broadcast">
+        <div class="panel-head">
+          <div class="panel-head-left">
+            <span class="panel-icon">📡</span>
+            <div>
+              <h2 class="panel-title">Auto Broadcast Control</h2>
+              <p class="panel-desc">Sote waqt bhi server automatically notifications bhejega — ye toggle se control karo</p>
+            </div>
+          </div>
+          <button class="btn btn--ghost btn--sm" id="btnRefreshConfig" onclick="loadConfig()">
+            <span>↻</span> Refresh
+          </button>
+        </div>
+
+        <div class="toggle-rows">
+          <div class="toggle-row" id="tr-whatsapp">
+            <div class="tr-left">
+              <div class="tr-icon">💬</div>
+              <div class="tr-info">
+                <div class="tr-title">WhatsApp — BEU Central Notices</div>
+                <div class="tr-desc">BEU Patna ke main notices automatically WhatsApp Channel par bheje jaate hain</div>
+              </div>
+            </div>
+            <div class="tr-right">
+              <span class="tr-status" id="lbl-wa-central">—</span>
+              <label class="toggle-switch" for="sw-wa-central">
+                <input type="checkbox" id="sw-wa-central" onchange="updateBroadcastSetting('autoDispatchWhatsApp', this.checked)" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="toggle-row" id="tr-college">
+            <div class="tr-left">
+              <div class="tr-icon">🏛️</div>
+              <div class="tr-info">
+                <div class="tr-title">WhatsApp — 38 College Notices</div>
+                <div class="tr-desc">Bihar ke 38 engineering colleges ke notices (default: band)</div>
+              </div>
+            </div>
+            <div class="tr-right">
+              <span class="tr-status" id="lbl-wa-college">—</span>
+              <label class="toggle-switch" for="sw-wa-college">
+                <input type="checkbox" id="sw-wa-college" onchange="updateBroadcastSetting('autoDispatchCollegeNotices', this.checked)" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="toggle-row">
+            <div class="tr-left">
+              <div class="tr-icon">🔔</div>
+              <div class="tr-info">
+                <div class="tr-title">App Push Notifications (FCM Firebase)</div>
+                <div class="tr-desc">Android/iOS app users ko direct push notification — server se auto</div>
+              </div>
+            </div>
+            <div class="tr-right">
+              <span class="tr-status on">AUTO ON</span>
+              <div class="badge-server">Server Control</div>
+            </div>
+          </div>
+
+          <div class="toggle-row">
+            <div class="tr-left">
+              <div class="tr-icon">🌐</div>
+              <div class="tr-info">
+                <div class="tr-title">Browser Push (Ye Dashboard)</div>
+                <div class="tr-desc">Jab koi nayi BEU notice aaye to is browser pe notification aaye</div>
+              </div>
+            </div>
+            <div class="tr-right">
+              <span class="tr-status" id="lbl-browser-push">—</span>
+              <button class="btn btn--accent btn--sm" id="btnBrowserPush" onclick="toggleBrowserPush()">
+                Enable
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PANEL 2: Manual Actions -->
+      <section class="panel" id="panel-manual">
+        <div class="panel-head">
+          <div class="panel-head-left">
+            <span class="panel-icon">⚡</span>
+            <div>
+              <h2 class="panel-title">Manual Controls</h2>
+              <p class="panel-desc">Abhi sync karo ya test notification bhejo</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="action-grid">
+          <button class="action-btn action-btn--primary" id="btnSync" onclick="triggerSync()">
+            <div class="ab-icon">🔄</div>
+            <div class="ab-text">
+              <div class="ab-title">BEU Sync Now</div>
+              <div class="ab-desc">Abhi BEU website check karo</div>
+            </div>
+          </button>
+
+          <button class="action-btn action-btn--wa" id="btnTestWA" onclick="sendTestWhatsApp()">
+            <div class="ab-icon">💬</div>
+            <div class="ab-text">
+              <div class="ab-title">WhatsApp Test</div>
+              <div class="ab-desc">Test message channel pe bhejo</div>
+            </div>
+          </button>
+
+          <button class="action-btn action-btn--browser" id="btnTestBrowser" onclick="sendTestBrowserNotif()">
+            <div class="ab-icon">🔔</div>
+            <div class="ab-text">
+              <div class="ab-title">Browser Test</div>
+              <div class="ab-desc">Abhi browser notification dekho</div>
+            </div>
+          </button>
+
+          <button class="action-btn action-btn--info" onclick="window.open('https://apnacollegebihar.online/notifications', '_blank')">
+            <div class="ab-icon">📋</div>
+            <div class="ab-text">
+              <div class="ab-title">View All Notices</div>
+              <div class="ab-desc">Website par sabhi notices dekho</div>
+            </div>
+          </button>
+        </div>
+
+        <div class="result-panel" id="resultPanel" style="display:none;">
+          <div class="result-head">
+            <span id="resultIcon">✅</span>
+            <span id="resultTitle">Result</span>
+          </div>
+          <div class="result-body" id="resultBody"></div>
+        </div>
+      </section>
+
+      <!-- PANEL 3: Custom Notification -->
+      <section class="panel" id="panel-custom">
+        <div class="panel-head">
+          <div class="panel-head-left">
+            <span class="panel-icon">✍️</span>
+            <div>
+              <h2 class="panel-title">Custom Notification Bhejo</h2>
+              <p class="panel-desc">Apna koi bhi message directly WhatsApp Channel aur Browser pe bhejo</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="customTitle">Notification Title</label>
+          <input type="text" id="customTitle" class="form-input" placeholder="e.g. BEU Exam Form Fill-up Notice 2026" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="customMsg">Message / Caption</label>
+          <textarea id="customMsg" class="form-textarea" rows="5" placeholder="Apna poora message yahan likho…&#10;&#10;Emojis bhi use kar sakte ho! 🚨📌🗓️" oninput="updateCharCount()"></textarea>
+          <div class="char-count"><span id="charCount">0</span> / 4096 characters</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="customPdf">PDF / Notice Link (optional)</label>
+          <input type="url" id="customPdf" class="form-input" placeholder="https://beu-bih.ac.in/notice/..." />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Kahan bhejein?</label>
+          <div class="checkbox-group">
+            <label class="cb-label" for="sendWA">
+              <input type="checkbox" id="sendWA" checked /> 💬 WhatsApp Channel
+            </label>
+            <label class="cb-label" for="sendBrowser">
+              <input type="checkbox" id="sendBrowser" checked /> 🌐 Browser Push
+            </label>
+          </div>
+        </div>
+
+        <button class="btn btn--accent btn--lg" id="btnSendCustom" onclick="sendCustomNotification()">
+          <span>🚀</span> Abhi Bhejo
+        </button>
+      </section>
+
+    </div>
+
+    <!-- RIGHT RAIL: Live Notice Feed -->
+    <aside class="rail rail--right" id="feedRail">
+      <section class="rail-section">
+        <div class="feed-head">
+          <h2 class="rail-label">LIVE NOTICE FEED</h2>
+          <span class="live-badge">● LIVE</span>
+        </div>
+        <div class="notice-feed" id="noticeFeed">
+          <div class="feed-loading">
+            <div class="loading-spinner"></div>
+            <span>Notices load ho rahe hain…</span>
+          </div>
+        </div>
+      </section>
+    </aside>
+
+  </main>
+
+  <!-- TOAST CONTAINER -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- FLOATING STATUS BADGE -->
+  <div class="sleep-badge" id="sleepBadge">
+    <div class="sleep-dot"></div>
+    <span>Server Jaag Raha Hai — Auto Mode ON</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

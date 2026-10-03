@@ -1,0 +1,19 @@
+{
+  "name": "beu-auto-notifier",
+  "version": "1.0.0",
+  "description": "Standalone BEU Auto Notification System — WhatsApp Channel pe auto notifications",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "node-cron": "^3.0.3",
+    "express": "^4.18.2",
+    "dotenv": "^16.4.5",
+    "whatsapp-web.js": "^1.23.0",
+    "qrcode": "^1.5.3",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
