@@ -6,8 +6,10 @@ const fs = require('fs');
 const path = require('path');
 const qrcode = require('qrcode');
 const pino = require('pino');
+const { MongoClient } = require('mongodb');
+const { useMongoAuthState } = require('./mongoAuthState');
 
-// Baileys — No Chrome needed, works on any server!
+// Baileys
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -20,11 +22,16 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 3001;
+const MONGODB_URI = process.env.MONGODB_URI || '';
 const BEU_API_URL = process.env.BEU_API_URL || 'https://beu-bih.ac.in/backend/v1/notice/get-notice-board';
 const DATA_FILE = path.join(__dirname, 'data', 'notices.json');
 const SETTINGS_FILE = path.join(__dirname, 'data', 'settings.json');
 const AUTH_FOLDER = path.join(__dirname, 'auth_info');
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL_MINUTES || '2');
+
+// MongoDB
+let mongoClient = null;
+let mongoDb = null;
 
 // ─── Ensure dirs ───────────────────────────────────────────────────────────
 [path.join(__dirname, 'data'), AUTH_FOLDER].forEach(d => {
@@ -65,12 +72,25 @@ async function initWhatsApp() {
   waStatus = 'connecting';
 
   try {
-    const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
+    // MongoDB auth — ya fallback to file
+    let authState, saveCreds;
+    if (mongoDb) {
+      log('🍃 MongoDB session use ho rahi hai...');
+      const mongoAuth = await useMongoAuthState(mongoDb);
+      authState = mongoAuth.state;
+      saveCreds = mongoAuth.saveCreds;
+    } else {
+      log('📁 File-based session use ho rahi hai...');
+      const fileAuth = await useMultiFileAuthState(AUTH_FOLDER);
+      authState = fileAuth.state;
+      saveCreds = fileAuth.saveCreds;
+    }
+
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
       version,
-      auth: state,
+      auth: authState,
       logger: pino({ level: 'silent' }), // Quiet logs
       printQRInTerminal: false,
       browser: ['BEU Notifier', 'Chrome', '1.0'],
@@ -300,12 +320,33 @@ app.listen(PORT, () => {
   log(`📡 BEU auto-check: har ${CHECK_INTERVAL} min`);
 });
 
-// Auto-connect if session exists
-setTimeout(() => {
-  if (fs.existsSync(AUTH_FOLDER) && fs.readdirSync(AUTH_FOLDER).length > 0) {
-    log('🔄 Purani session mili — WhatsApp auto-connect...');
-    initWhatsApp();
+// Connect MongoDB then start WhatsApp
+async function start() {
+  if (MONGODB_URI) {
+    try {
+      log('🍃 MongoDB connect ho raha hai...');
+      mongoClient = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
+      await mongoClient.connect();
+      mongoDb = mongoClient.db('beu-notifier');
+      log('✅ MongoDB connected! Session persistent rahegi.');
+    } catch (err) {
+      log(`⚠️ MongoDB connect failed: ${err.message} — file session use ho rahi hai`);
+      mongoDb = null;
+    }
   } else {
-    log('ℹ️ Dashboard se WhatsApp connect karein');
+    log('ℹ️ MONGODB_URI nahi mila — file session use ho rahi hai');
   }
-}, 2000);
+
+  // Auto-connect WhatsApp
+  setTimeout(() => {
+    const hasFileSession = fs.existsSync(AUTH_FOLDER) && fs.readdirSync(AUTH_FOLDER).length > 0;
+    if (mongoDb || hasFileSession) {
+      log('🔄 Session mili — WhatsApp auto-connect...');
+      initWhatsApp();
+    } else {
+      log('ℹ️ Dashboard se WhatsApp connect karein');
+    }
+  }, 2000);
+}
+
+start();
