@@ -182,22 +182,28 @@ async function loadSettings() {
   try {
     const res = await fetch(`${API}/api/settings`);
     const d = await res.json();
-    const inp = document.getElementById('channelIdInput');
-    const tog = document.getElementById('autoDispatchToggle');
-    if (inp) inp.value = d.channelId || '';
-    if (tog) tog.checked = d.autoDispatch !== false;
+    const inpId = document.getElementById('channelIdInput');
+    const inpLink = document.getElementById('channelLinkInput');
+    const togImg = document.getElementById('sendImageToggle');
+    const togAuto = document.getElementById('autoDispatchToggle');
+    if (inpId) inpId.value = d.channelId || '';
+    if (inpLink) inpLink.value = d.channelLink || '';
+    if (togImg) togImg.checked = d.sendImage !== false;
+    if (togAuto) togAuto.checked = d.autoDispatch !== false;
   } catch {}
 }
 
 async function saveSettings() {
   const channelId = document.getElementById('channelIdInput')?.value.trim() || '';
+  const channelLink = document.getElementById('channelLinkInput')?.value.trim() || '';
+  const sendImage = document.getElementById('sendImageToggle')?.checked !== false;
   const autoDispatch = document.getElementById('autoDispatchToggle')?.checked !== false;
 
   try {
     const res = await fetch(`${API}/api/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channelId, autoDispatch })
+      body: JSON.stringify({ channelId, channelLink, sendImage, autoDispatch })
     });
     const d = await res.json();
     if (d.success) {
@@ -207,6 +213,17 @@ async function saveSettings() {
   } catch {
     showToast('❌', 'Save failed', 'err');
   }
+}
+
+async function toggleSendImage(val) {
+  try {
+    await fetch(`${API}/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sendImage: val })
+    });
+    showToast(val ? '🖼️' : '📝', `Image mode: ${val ? 'ON' : 'OFF'}`, val ? 'ok' : 'warn');
+  } catch {}
 }
 
 async function toggleAutoDispatch(val) {
@@ -337,6 +354,9 @@ async function loadNotices(checkNew = false) {
   } catch {}
 }
 
+let noticesById = {};
+let activeModalNoticeId = null;
+
 function renderNotices(list, newIds) {
   const el = document.getElementById('noticeList');
   if (!el) return;
@@ -346,25 +366,124 @@ function renderNotices(list, newIds) {
     return;
   }
 
+  noticesById = {};
+  list.forEach(n => { noticesById[String(n.id)] = n; });
+
   el.innerHTML = list.map((n, i) => {
     const date = n.date ? new Date(n.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '';
     const pdfUrl = n.pdfLink || '#';
     const isNew = newIds.has(String(n.id));
+    const hasImg = !!n.imageUrl;
 
     return `
-      <div class="notice-item ${isNew ? 'is-new' : ''}" onclick="window.open('${pdfUrl}','_blank')" style="animation-delay:${i*25}ms">
+      <div class="notice-item ${isNew ? 'is-new' : ''}" style="animation-delay:${i*25}ms">
         <div class="ni-top">
           <span class="ni-tag">📋 BEU PATNA</span>
           <span class="ni-date">${date}</span>
         </div>
-        <div class="ni-title">${n.title || 'BEU Notice'}</div>
+        <div class="ni-title" onclick="window.open('${pdfUrl}','_blank')">${n.title || 'BEU Notice'}</div>
+
+        ${hasImg ? `
+          <img class="notice-thumb" src="${n.imageUrl}" alt="Notice Preview" onclick="openImgModal('${n.id}')" title="Click to view full image" />
+        ` : ''}
+
         <div class="ni-chips">
           ${n.dispatched ? '<span class="chip chip-sent">✅ WA SENT</span>' : '<span class="chip chip-pending">⏳ PENDING</span>'}
           ${n.isUrgent ? '<span class="chip chip-urgent">🚨 URGENT</span>' : ''}
+          ${hasImg ? '<span class="chip chip-ok" style="background:rgba(59,130,246,0.15);color:#2563eb;border-color:rgba(59,130,246,0.3)">🖼️ IMAGE READY</span>' : ''}
           ${isNew ? '<span class="chip chip-new">NEW</span>' : ''}
+        </div>
+
+        <div class="ni-actions">
+          ${hasImg ? `
+            <button class="ni-btn ni-btn-img" onclick="openImgModal('${n.id}')">🖼️ View Image</button>
+          ` : `
+            <button class="ni-btn" onclick="generateImageForNotice('${n.id}', this)">🎨 Get Image</button>
+          `}
+          <a class="ni-btn" href="${pdfUrl}" target="_blank">📄 PDF</a>
+          <button class="ni-btn ni-btn-wa" onclick="sendSingleNotice('${n.id}', this)">🚀 Send to WA</button>
         </div>
       </div>`;
   }).join('');
+}
+
+function openImgModal(id) {
+  const n = noticesById[String(id)];
+  if (!n) return;
+  activeModalNoticeId = String(id);
+
+  const modal = document.getElementById('imgModal');
+  const img = document.getElementById('modalImg');
+  const title = document.getElementById('modalTitle');
+  const downloadBtn = document.getElementById('modalDownloadBtn');
+  const pdfBtn = document.getElementById('modalPdfBtn');
+
+  if (title) title.textContent = n.title || 'Notice Preview';
+  if (img) img.src = n.imageUrl || '';
+  if (downloadBtn) {
+    downloadBtn.href = n.imageUrl || '';
+    downloadBtn.download = `BEU_Notice_${n.id}.png`;
+  }
+  if (pdfBtn) {
+    pdfBtn.href = n.pdfLink || '#';
+  }
+
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeImgModal(e, force = false) {
+  if (force || (e && e.target && e.target.id === 'imgModal')) {
+    const modal = document.getElementById('imgModal');
+    if (modal) modal.style.display = 'none';
+    activeModalNoticeId = null;
+  }
+}
+
+async function sendNoticeFromModal() {
+  if (!activeModalNoticeId) return;
+  const btn = document.getElementById('modalSendBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Bhej raha hai...'; }
+
+  await sendSingleNotice(activeModalNoticeId);
+  if (btn) { btn.disabled = false; btn.textContent = '🚀 WhatsApp pe Bhejo'; }
+}
+
+async function sendSingleNotice(id, btn = null) {
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Sending...'; }
+  try {
+    const res = await fetch(`${API}/api/notices/${id}/send`, { method: 'POST' });
+    const d = await res.json();
+    if (d.success) {
+      showToast('✅', `Notice #${id} WhatsApp pe bhej di gayi! (Image: ${d.result?.hasImage ? 'Haan' : 'Text'})`, 'ok');
+      loadNotices();
+    } else {
+      showToast('❌', `Send failed: ${d.result?.reason || d.error || 'Check connection'}`, 'err');
+    }
+  } catch (err) {
+    showToast('❌', err.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🚀 Send to WA'; }
+  }
+}
+
+async function generateImageForNotice(id, btn = null) {
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Rendering...'; }
+  showToast('⏳', `Notice #${id} ke liye image ban rahi hai...`, 'warn');
+  try {
+    const res = await fetch(`${API}/api/notices/${id}/generate-image`, { method: 'POST' });
+    const d = await res.json();
+    if (d.success) {
+      showToast('✅', `Image ready ho gayi!`, 'ok');
+      await loadNotices();
+      openImgModal(id);
+    } else {
+      showToast('❌', `Image generation failed: ${d.error || 'Error'}`, 'err');
+    }
+  } catch (err) {
+    showToast('❌', err.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🎨 Get Image'; }
+  }
 }
 
 // ── Result Box ────────────────────────────────────────────────────────────

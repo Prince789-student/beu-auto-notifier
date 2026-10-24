@@ -163,10 +163,29 @@
         <div class="settings-grid">
           <div class="setting-row">
             <div class="sr-info">
-              <div class="sr-label">WhatsApp Channel ID</div>
-              <div class="sr-desc">Channel ka ID (link mein jo number hota hai) ya phone number</div>
+              <div class="sr-label">WhatsApp Channel ID / Code</div>
+              <div class="sr-desc">Channel invite code ya number (e.g. 0029VbC6FsH3wtb5UEDvrW0a)</div>
             </div>
-            <input type="text" class="setting-input" id="channelIdInput" placeholder="e.g. 120363xxxxxxxxxx" />
+            <input type="text" class="setting-input" id="channelIdInput" placeholder="0029VbC6FsH3wtb5UEDvrW0a" />
+          </div>
+
+          <div class="setting-row">
+            <div class="sr-info">
+              <div class="sr-label">WhatsApp Channel Link</div>
+              <div class="sr-desc">Invite link jo har notice message ke sath WhatsApp pe jayegi</div>
+            </div>
+            <input type="text" class="setting-input" id="channelLinkInput" placeholder="https://whatsapp.com/channel/0029VbC6FsH3wtb5UEDvrW0a" />
+          </div>
+
+          <div class="setting-row">
+            <div class="sr-info">
+              <div class="sr-label">Convert & Send Notice Image 🖼️</div>
+              <div class="sr-desc">Notice link/PDF ko high-res image ke roop me download karke bhejo</div>
+            </div>
+            <label class="toggle" for="sendImageToggle">
+              <input type="checkbox" id="sendImageToggle" onchange="toggleSendImage(this.checked)" checked />
+              <span class="toggle-track"></span>
+            </label>
           </div>
 
           <div class="setting-row">
@@ -264,7 +283,6 @@
         </div>
       </div>
     </aside>
-
   </main>
 
   <!-- TOASTS -->
@@ -274,6 +292,24 @@
   <div class="footer-pill">
     <span class="fp-dot"></span>
     <span id="fpText">Server chal raha hai — Auto Mode ON</span>
+  </div>
+
+  <!-- IMAGE PREVIEW MODAL -->
+  <div class="img-modal-backdrop" id="imgModal" onclick="closeImgModal(event)" style="display:none;">
+    <div class="img-modal-card">
+      <div class="img-modal-header">
+        <div class="img-modal-title" id="modalTitle">Notice Image Preview</div>
+        <button class="modal-close-btn" onclick="closeImgModal(null, true)">✕</button>
+      </div>
+      <div class="img-modal-body">
+        <img id="modalImg" src="" alt="Notice Preview" />
+      </div>
+      <div class="img-modal-footer">
+        <a id="modalDownloadBtn" class="btn btn-ghost btn-sm" href="" download target="_blank">💾 Download Image</a>
+        <a id="modalPdfBtn" class="btn btn-ghost btn-sm" href="" target="_blank">📄 Original PDF</a>
+        <button id="modalSendBtn" class="btn btn-primary btn-sm" onclick="sendNoticeFromModal()">🚀 WhatsApp pe Bhejo</button>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>

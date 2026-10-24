@@ -1,5 +1,9 @@
 node_modules/
 .wpp_session/
+.wwebjs_cache/
+auth_info/
 data/
 .env
 *.log
+public/media/*
+!public/media/.gitkeep

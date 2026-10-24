@@ -8,6 +8,11 @@ const qrcode = require('qrcode');
 const pino = require('pino');
 const { MongoClient } = require('mongodb');
 const { useMongoAuthState } = require('./mongoAuthState');
+const {
+  generateNoticeImage,
+  buildCaption: buildNoticeCaption,
+  MEDIA_DIR
+} = require('./noticeImageService');
 
 // Baileys
 const {
@@ -34,7 +39,7 @@ let mongoClient = null;
 let mongoDb = null;
 
 // ─── Ensure dirs ───────────────────────────────────────────────────────────
-[path.join(__dirname, 'data'), AUTH_FOLDER].forEach(d => {
+[path.join(__dirname, 'data'), AUTH_FOLDER, MEDIA_DIR, path.join(__dirname, 'public', 'vendor')].forEach(d => {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 });
 
@@ -55,8 +60,23 @@ function loadNotices() {
 }
 function saveNotices(data) { fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8'); }
 function loadSettings() {
-  try { if (fs.existsSync(SETTINGS_FILE)) return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); } catch {}
-  return { autoDispatch: process.env.AUTO_DISPATCH !== 'false', channelId: process.env.WHATSAPP_CHANNEL_ID || '' };
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const s = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+      return {
+        autoDispatch: s.autoDispatch !== undefined ? s.autoDispatch : (process.env.AUTO_DISPATCH !== 'false'),
+        channelId: s.channelId !== undefined ? s.channelId : (process.env.WHATSAPP_CHANNEL_ID || '0029VbC6FsH3wtb5UEDvrW0a'),
+        channelLink: s.channelLink !== undefined ? s.channelLink : (process.env.WHATSAPP_CHANNEL_LINK || 'https://whatsapp.com/channel/0029VbC6FsH3wtb5UEDvrW0a'),
+        sendImage: s.sendImage !== undefined ? s.sendImage : (process.env.AUTO_SEND_IMAGE !== 'false')
+      };
+    }
+  } catch {}
+  return {
+    autoDispatch: process.env.AUTO_DISPATCH !== 'false',
+    channelId: process.env.WHATSAPP_CHANNEL_ID || '0029VbC6FsH3wtb5UEDvrW0a',
+    channelLink: process.env.WHATSAPP_CHANNEL_LINK || 'https://whatsapp.com/channel/0029VbC6FsH3wtb5UEDvrW0a',
+    sendImage: process.env.AUTO_SEND_IMAGE !== 'false'
+  };
 }
 function saveSettings(data) { fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8'); }
 function log(msg) {
@@ -188,7 +208,7 @@ async function getChannelJid(input) {
 }
 
 // ─── Send to WhatsApp Channel ─────────────────────────────────────────────
-async function sendToWhatsApp(caption) {
+async function sendToWhatsApp(caption, imagePath = null) {
   if (!waSocket || waStatus !== 'connected') {
     return { success: false, reason: 'WhatsApp not connected' };
   }
@@ -199,10 +219,34 @@ async function sendToWhatsApp(caption) {
 
   try {
     const jid = await getChannelJid(channelId);
-    log(`📤 Sending message to JID: ${jid}`);
-    const sentMsg = await waSocket.sendMessage(jid, { text: caption });
+    log(`📤 Sending message to JID: ${jid} (image: ${imagePath ? 'YES' : 'NO'})`);
+
+    let sentMsg = null;
+    let hasSentWithImage = false;
+
+    // Send as Image message if imagePath is provided and file exists
+    if (imagePath && fs.existsSync(imagePath) && fs.statSync(imagePath).size > 1000) {
+      try {
+        const imageBuffer = fs.readFileSync(imagePath);
+        sentMsg = await waSocket.sendMessage(jid, {
+          image: imageBuffer,
+          caption: caption
+        });
+        hasSentWithImage = true;
+        log(`✅ Image message successfully sent to ${jid}`);
+      } catch (imgErr) {
+        log(`⚠️ Sending as image failed (${imgErr.message}) — falling back to text only...`);
+      }
+    }
+
+    // Fallback or text-only send
+    if (!sentMsg) {
+      sentMsg = await waSocket.sendMessage(jid, { text: caption });
+      log(`✅ Text message successfully sent to ${jid}`);
+    }
+
     totalSentToday++;
-    return { success: true, jid, msgId: sentMsg?.key?.id };
+    return { success: true, jid, msgId: sentMsg?.key?.id, hasImage: hasSentWithImage };
   } catch (err) {
     log(`❌ Send error: ${err.message}`);
     return { success: false, reason: err.message };
@@ -221,7 +265,7 @@ async function checkAndBroadcast(forceAll = false) {
   let newCount = 0, sentCount = 0;
 
   try {
-    const res = await axios.get(BEU_API_URL, { timeout: 20000 });
+    const res = await axios.get(BEU_API_URL, { timeout: 25000 });
     const raw = Array.isArray(res.data) ? res.data : [];
     log(`📋 ${raw.length} notices BEU se mili`);
 
@@ -234,19 +278,54 @@ async function checkAndBroadcast(forceAll = false) {
       const link = n.link ? `https://beu-bih.ac.in/backend/${encodeURIComponent(n.link.trim())}` : '';
       const date = n.noticedate || new Date().toISOString().split('T')[0];
       const isUrgent = n.isimportant === 1;
-      const caption = buildCaption({ title, pdfLink: link, date, isUrgent });
 
-      localCache[id] = { id, title, pdfLink: link, date, isUrgent, caption, dispatched: false, createdAt: new Date().toISOString() };
+      // 1. Build caption with notice link + user's WhatsApp channel link
+      const caption = buildNoticeCaption({
+        title,
+        pdfLink: link,
+        date,
+        isUrgent,
+        channelLink: settings.channelLink
+      });
+
+      // 2. Download and convert notice link into an image
+      let imageAsset = { success: false, imagePath: null, relativeUrl: null };
+      try {
+        log(`🖼️ Notice #${id} ke liye image generate/download ho rahi hai...`);
+        imageAsset = await generateNoticeImage({ id, title, pdfLink: link, date, isUrgent });
+      } catch (imgErr) {
+        log(`⚠️ Image generation error for #${id}: ${imgErr.message}`);
+      }
+
+      localCache[id] = {
+        id,
+        title,
+        pdfLink: link,
+        date,
+        isUrgent,
+        caption,
+        imageUrl: imageAsset.relativeUrl || null,
+        imagePath: imageAsset.imagePath || null,
+        dispatched: false,
+        createdAt: new Date().toISOString()
+      };
       saveNotices(localCache);
 
       if (settings.autoDispatch && settings.channelId) {
-        const r = await sendToWhatsApp(caption);
+        const imageToSend = (settings.sendImage !== false && imageAsset.success) ? imageAsset.imagePath : null;
+        const r = await sendToWhatsApp(caption, imageToSend);
         localCache[id].dispatched = r.success;
         localCache[id].dispatchedAt = new Date().toISOString();
+        localCache[id].sentWithImage = !!r.hasImage;
         saveNotices(localCache);
-        if (r.success) { sentCount++; log(`✅ Sent: ${title}`); }
-        else log(`⚠️ Send failed: ${r.reason}`);
-        await new Promise(r => setTimeout(r, 1500));
+
+        if (r.success) {
+          sentCount++;
+          log(`✅ Sent to WA: ${title} (image: ${r.hasImage ? 'YES' : 'NO'})`);
+        } else {
+          log(`⚠️ Send failed: ${r.reason}`);
+        }
+        await new Promise(r => setTimeout(r, 2000));
       }
     }
 
@@ -261,17 +340,9 @@ async function checkAndBroadcast(forceAll = false) {
   }
 }
 
-function buildCaption({ title, pdfLink, date, isUrgent }) {
-  const dateStr = new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
-  return [
-    isUrgent ? '🚨 *URGENT BEU NOTICE*' : '🔔 *New BEU Notice*',
-    '',
-    `📌 *${title}*`,
-    `🗓️ Date: ${dateStr}`,
-    pdfLink ? `\n📄 *Download PDF:*\n👉 ${pdfLink}` : '',
-    '\n━━━━━━━━━━━━━━━━━━',
-    '#BEU #BiharEngineering #Notice'
-  ].filter(Boolean).join('\n');
+function buildCaption(opts) {
+  const settings = loadSettings();
+  return buildNoticeCaption({ ...opts, channelLink: settings.channelLink });
 }
 
 // ─── Cron ──────────────────────────────────────────────────────────────────
@@ -317,10 +388,96 @@ app.post('/api/sync', async (req, res) => {
 });
 
 app.post('/api/send-custom', async (req, res) => {
-  const { message } = req.body || {};
+  const { message, title, pdfLink, imagePath } = req.body || {};
   if (!message) return res.status(400).json({ success: false, error: 'Message required' });
-  const result = await sendToWhatsApp(message);
+
+  const settings = loadSettings();
+  let fullMessage = message;
+
+  // Append links if not already in message
+  if (pdfLink && !fullMessage.includes(pdfLink)) {
+    fullMessage += `\n\n📄 *Notice Link:*\n👉 ${pdfLink}`;
+  }
+  if (settings.channelLink && !fullMessage.includes(settings.channelLink)) {
+    fullMessage += `\n\n📢 *WhatsApp Channel:*\n👉 ${settings.channelLink}`;
+  }
+
+  const result = await sendToWhatsApp(fullMessage, imagePath || null);
   res.json(result);
+});
+
+// Send single notice to WhatsApp
+app.post('/api/notices/:id/send', async (req, res) => {
+  const { id } = req.params;
+  const localCache = loadNotices();
+  const notice = localCache[id];
+
+  if (!notice) {
+    return res.status(404).json({ success: false, error: 'Notice not found' });
+  }
+
+  const settings = loadSettings();
+
+  // Ensure image exists
+  let imagePath = notice.imagePath;
+  if (!imagePath || !fs.existsSync(imagePath)) {
+    log(`🖼️ Notice #${id} ke liye image generate ho rahi hai...`);
+    const imgRes = await generateNoticeImage(notice);
+    if (imgRes.success) {
+      imagePath = imgRes.imagePath;
+      localCache[id].imagePath = imgRes.imagePath;
+      localCache[id].imageUrl = imgRes.relativeUrl;
+      saveNotices(localCache);
+    }
+  }
+
+  // Build latest caption with channel link
+  const caption = buildNoticeCaption({
+    title: notice.title,
+    pdfLink: notice.pdfLink,
+    date: notice.date,
+    isUrgent: notice.isUrgent,
+    channelLink: settings.channelLink
+  });
+
+  const sendImg = (settings.sendImage !== false && imagePath && fs.existsSync(imagePath)) ? imagePath : null;
+  const result = await sendToWhatsApp(caption, sendImg);
+
+  if (result.success) {
+    localCache[id].dispatched = true;
+    localCache[id].dispatchedAt = new Date().toISOString();
+    localCache[id].sentWithImage = !!result.hasImage;
+    localCache[id].caption = caption;
+    saveNotices(localCache);
+  }
+
+  res.json({ success: result.success, result, notice: localCache[id] });
+});
+
+// Re-generate or generate image for a notice
+app.post('/api/notices/:id/generate-image', async (req, res) => {
+  const { id } = req.params;
+  const localCache = loadNotices();
+  const notice = localCache[id];
+
+  if (!notice) {
+    return res.status(404).json({ success: false, error: 'Notice not found' });
+  }
+
+  try {
+    log(`🖼️ Manual image generation request for notice #${id}...`);
+    const imgRes = await generateNoticeImage(notice);
+    if (imgRes.success) {
+      localCache[id].imagePath = imgRes.imagePath;
+      localCache[id].imageUrl = imgRes.relativeUrl;
+      saveNotices(localCache);
+      return res.json({ success: true, imageUrl: imgRes.relativeUrl, imagePath: imgRes.imagePath });
+    } else {
+      return res.status(500).json({ success: false, error: imgRes.error || 'Failed to generate image' });
+    }
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 app.get('/api/channel/info', async (req, res) => {
@@ -343,9 +500,11 @@ app.get('/api/settings', (req, res) => res.json(loadSettings()));
 
 app.post('/api/settings', (req, res) => {
   const current = loadSettings();
-  const { autoDispatch, channelId } = req.body || {};
+  const { autoDispatch, channelId, channelLink, sendImage } = req.body || {};
   if (typeof autoDispatch === 'boolean') current.autoDispatch = autoDispatch;
   if (channelId !== undefined) current.channelId = channelId.trim();
+  if (channelLink !== undefined) current.channelLink = channelLink.trim();
+  if (typeof sendImage === 'boolean') current.sendImage = sendImage;
   saveSettings(current);
   res.json({ success: true, settings: current });
 });
