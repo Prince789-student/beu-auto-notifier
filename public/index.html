@@ -132,17 +132,27 @@
               <p class="ph-desc">QR code scan karo aur WhatsApp auto-sender shuru karo</p>
             </div>
           </div>
-          <span class="wa-status-badge" id="waBadge">Disconnected</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button class="btn btn-warning btn-sm" id="btnChangeScannerTop" onclick="resetScanner()" title="Purana session clear karke naya QR scan karein">
+              🔄 Change Scanner
+            </button>
+            <span class="wa-status-badge" id="waBadge">Disconnected</span>
+          </div>
         </div>
 
         <div class="wa-area" id="waArea">
           <!-- QR or Connected state shown here by JS -->
           <div class="wa-placeholder" id="waPlaceholder">
             <div class="wa-icon-big">📱</div>
-            <p class="wa-msg">Connect button dabao aur QR scan karo</p>
-            <button class="btn btn-primary" id="btnWaConnect" onclick="connectWhatsApp()">
-              WhatsApp Connect Karo
-            </button>
+            <p class="wa-msg">Connect button dabao ya naye account ke liye Scanner Change karo</p>
+            <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:4px;">
+              <button class="btn btn-primary" id="btnWaConnect" onclick="connectWhatsApp()">
+                WhatsApp Connect Karo
+              </button>
+              <button class="btn btn-warning" onclick="resetScanner()">
+                🔄 Scanner Change (Naya QR)
+              </button>
+            </div>
           </div>
         </div>
       </section>

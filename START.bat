@@ -20,6 +20,7 @@ if %errorlevel% neq 0 (
 echo [2/2] Server shuru ho raha hai...
 echo.
 echo  Dashboard: http://localhost:3001
+echo  Tip: Scanner change/reset ke liye 'RESET_SCANNER.bat' use karein
 echo  Press Ctrl+C to stop
 echo.
 node server.js

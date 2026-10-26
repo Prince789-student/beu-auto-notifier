@@ -131,6 +131,12 @@ async function initWhatsApp() {
         try {
           waQrDataUrl = await qrcode.toDataURL(qr);
         } catch (e) { log('QR generate error: ' + e.message); }
+
+        try {
+          qrcode.toString(qr, { type: 'terminal', small: true }, (err, terminalQr) => {
+            if (!err && terminalQr) console.log('\n' + terminalQr + '\n');
+          });
+        } catch {}
       }
 
       if (connection === 'open') {
@@ -520,9 +526,49 @@ app.post('/api/wa/disconnect', async (req, res) => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (waSocket) { try { await waSocket.logout(); } catch {} waSocket = null; }
   waStatus = 'disconnected';
+  waQrDataUrl = null;
   fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
   fs.mkdirSync(AUTH_FOLDER, { recursive: true });
-  res.json({ success: true });
+  if (mongoDb) {
+    try { await mongoDb.collection('wa_session').deleteMany({}); } catch {}
+  }
+  res.json({ success: true, message: 'Disconnected' });
+});
+
+app.post('/api/wa/reset-scanner', async (req, res) => {
+  log('🔄 Scanner reset initiated — session files delete karke naya QR generate ho raha hai...');
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (waSocket) {
+    try { await waSocket.logout(); } catch (e) {
+      try { waSocket.end(); } catch {}
+    }
+    waSocket = null;
+  }
+  waStatus = 'disconnected';
+  waQrDataUrl = null;
+
+  try {
+    fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
+    fs.mkdirSync(AUTH_FOLDER, { recursive: true });
+  } catch (err) {
+    log('⚠️ AUTH_FOLDER clear warning: ' + err.message);
+  }
+
+  if (mongoDb) {
+    try {
+      await mongoDb.collection('wa_session').deleteMany({});
+      log('🍃 MongoDB wa_session cleared');
+    } catch (e) {
+      log('⚠️ MongoDB clear error: ' + e.message);
+    }
+  }
+
+  // Fresh WhatsApp socket init for new QR scan
+  setTimeout(() => {
+    initWhatsApp();
+  }, 1000);
+
+  res.json({ success: true, message: 'Purana session hata diya gaya hai. Naya QR code ban raha hai...' });
 });
 
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));

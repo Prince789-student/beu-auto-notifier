@@ -115,7 +115,10 @@ function updateWaArea(d) {
         <div class="wa-check">✅</div>
         <div class="wa-conn-text">WhatsApp Connected!</div>
         <div class="wa-conn-sub">Auto-notifications ON hain — aap so sakte ho!</div>
-        <button class="btn btn-ghost btn-sm" onclick="disconnectWa()">Disconnect</button>
+        <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap;">
+          <button class="btn btn-warning btn-sm" onclick="resetScanner()">🔄 Scanner Change / Naya Number</button>
+          <button class="btn btn-ghost btn-sm" onclick="disconnectWa()">Disconnect</button>
+        </div>
       </div>`;
   } else if (d.waStatus === 'qr_ready') {
     loadQr();
@@ -123,14 +126,18 @@ function updateWaArea(d) {
     area.innerHTML = `
       <div class="wa-placeholder">
         <div class="wa-icon-big">⏳</div>
-        <p class="wa-msg">WhatsApp start ho raha hai… thoda wait karo</p>
+        <p class="wa-msg">WhatsApp QR code ban raha hai… thoda wait karo (5-10 sec)</p>
+        <button class="btn btn-ghost btn-sm" style="margin-top:10px;" onclick="checkStatus()">🔄 Refresh Status</button>
       </div>`;
   } else {
     area.innerHTML = `
       <div class="wa-placeholder">
         <div class="wa-icon-big">📱</div>
-        <p class="wa-msg">Connect karo aur QR scan karo</p>
-        <button class="btn btn-primary" onclick="connectWhatsApp()">WhatsApp Connect Karo</button>
+        <p class="wa-msg">Connect button dabao ya naye account ke liye Scanner Change karo</p>
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px;">
+          <button class="btn btn-primary" onclick="connectWhatsApp()">WhatsApp Connect Karo</button>
+          <button class="btn btn-warning" onclick="resetScanner()">🔄 Scanner Change (Naya QR)</button>
+        </div>
       </div>`;
   }
 }
@@ -146,6 +153,10 @@ async function loadQr() {
           <div class="qr-wrap">
             <img src="${d.qrDataUrl}" alt="WhatsApp QR Code" />
             <div class="qr-instructions">📱 WhatsApp kholo → Linked Devices → Link a Device → QR scan karo</div>
+            <div style="display:flex;gap:10px;justify-content:center;margin-top:12px;flex-wrap:wrap;">
+              <button class="btn btn-ghost btn-sm" onclick="loadQr()">🔄 Refresh QR</button>
+              <button class="btn btn-warning btn-sm" onclick="resetScanner()">🔄 Reset / Naya QR Layein</button>
+            </div>
           </div>`;
       }
     }
@@ -164,6 +175,30 @@ async function connectWhatsApp() {
     showToast('❌', 'Connect failed', 'err');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'WhatsApp Connect Karo'; }
+  }
+}
+
+async function resetScanner() {
+  const confirmed = confirm('Kya aap WhatsApp scanner change karna chahte hain?\n\nIsse purana session delete ho jayega aur naye WhatsApp account ko link karne ke liye naya QR code banega.');
+  if (!confirmed) return;
+
+  try {
+    showToast('⏳', 'Purana session reset ho raha hai, naya QR ban raha hai...', 'warn');
+    const res = await fetch(`${API}/api/wa/reset-scanner`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      showToast('📷', data.message || 'Naya QR generate ho raha hai...', 'ok');
+      let count = 0;
+      const pollTimer = setInterval(async () => {
+        count++;
+        await checkStatus();
+        if (count >= 8) clearInterval(pollTimer);
+      }, 2000);
+    } else {
+      showToast('❌', data.message || 'Reset failed', 'err');
+    }
+  } catch (err) {
+    showToast('❌', 'Error: ' + err.message, 'err');
   }
 }
 
