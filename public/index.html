@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BEU Auto Notifier — WhatsApp Dashboard</title>
-  <meta name="description" content="Standalone BEU notification system — automatically sends new BEU notices to WhatsApp channel" />
+  <meta name="description" content="Standalone BEU notification system — automatically sends new BEU notices & result-one updates with PDF to WhatsApp channel" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -24,7 +24,7 @@
         </div>
         <div>
           <span class="brand-name">BEU Auto Notifier</span>
-          <span class="brand-sub">WhatsApp Auto System</span>
+          <span class="brand-sub">Notice Board + result-one PDF Dispatch</span>
         </div>
       </div>
 
@@ -62,9 +62,19 @@
             <span class="sl-badge" id="st-wa">—</span>
           </li>
           <li class="sl-item">
+            <span class="sl-icon">🎓</span>
+            <span class="sl-name">result-one</span>
+            <span class="sl-badge ok">MONITORED</span>
+          </li>
+          <li class="sl-item">
             <span class="sl-icon">📡</span>
-            <span class="sl-name">BEU Check</span>
+            <span class="sl-name">BEU Scan</span>
             <span class="sl-badge" id="st-cron">AUTO</span>
+          </li>
+          <li class="sl-item">
+            <span class="sl-icon">📄</span>
+            <span class="sl-name">PDF Dispatch</span>
+            <span class="sl-badge" id="st-pdf">ON</span>
           </li>
           <li class="sl-item">
             <span class="sl-icon">📤</span>
@@ -76,43 +86,43 @@
 
       <!-- Cron Info -->
       <div class="card">
-        <div class="card-label">AUTO CHECK</div>
+        <div class="card-label">AUTO SCANNER</div>
         <div class="cron-display">
           <div class="cron-pulse" id="cronPulse"></div>
           <div class="cron-info">
             <div class="cron-main" id="cronInterval">Har 2 min</div>
-            <div class="cron-sub">24/7 background</div>
+            <div class="cron-sub">Notice + result-one 24/7</div>
           </div>
         </div>
         <div class="time-row">
-          <span class="tr-key">Last check</span>
+          <span class="tr-key">Last scan</span>
           <span class="tr-val" id="lastCheck">—</span>
         </div>
         <div class="time-row">
-          <span class="tr-key">Next check</span>
+          <span class="tr-key">Next scan</span>
           <span class="tr-val countdown" id="nextCheck">—</span>
         </div>
       </div>
 
       <!-- Stats -->
       <div class="card">
-        <div class="card-label">STATS</div>
+        <div class="card-label">DATABASE STATS</div>
         <div class="stats-2x2">
           <div class="stat">
             <div class="stat-n" id="stat-total">—</div>
-            <div class="stat-l">Total</div>
+            <div class="stat-l">Total Items</div>
           </div>
           <div class="stat">
             <div class="stat-n green" id="stat-sent">—</div>
             <div class="stat-l">WA Sent</div>
           </div>
           <div class="stat">
-            <div class="stat-n amber" id="stat-pending">—</div>
-            <div class="stat-l">Pending</div>
+            <div class="stat-n" id="stat-results">0</div>
+            <div class="stat-l">Results</div>
           </div>
           <div class="stat">
             <div class="stat-n" id="stat-today">0</div>
-            <div class="stat-l">Today Sent</div>
+            <div class="stat-l">Sent Today</div>
           </div>
         </div>
       </div>
@@ -129,7 +139,7 @@
             <span class="ph-icon">📱</span>
             <div>
               <h2 class="ph-title">WhatsApp Connect</h2>
-              <p class="ph-desc">QR code scan karo aur WhatsApp auto-sender shuru karo</p>
+              <p class="ph-desc">QR code scan karke Apna College Bihar channel auto-sender connect karo</p>
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
@@ -141,7 +151,6 @@
         </div>
 
         <div class="wa-area" id="waArea">
-          <!-- QR or Connected state shown here by JS -->
           <div class="wa-placeholder" id="waPlaceholder">
             <div class="wa-icon-big">📱</div>
             <p class="wa-msg">Connect button dabao ya naye account ke liye Scanner Change karo</p>
@@ -163,8 +172,8 @@
           <div class="panel-hd-left">
             <span class="ph-icon">⚙️</span>
             <div>
-              <h2 class="ph-title">Settings</h2>
-              <p class="ph-desc">WhatsApp Channel ID aur auto-dispatch configure karo</p>
+              <h2 class="ph-title">Notification & PDF Settings</h2>
+              <p class="ph-desc">WhatsApp Channel aur PDF delivery preferences</p>
             </div>
           </div>
           <button class="btn btn-ghost btn-sm" onclick="saveSettings()">💾 Save</button>
@@ -173,24 +182,47 @@
         <div class="settings-grid">
           <div class="setting-row">
             <div class="sr-info">
-              <div class="sr-label">WhatsApp Channel ID / Code</div>
-              <div class="sr-desc">Channel invite code ya number (e.g. 0029VbC6FsH3wtb5UEDvrW0a)</div>
+              <div class="sr-label">WhatsApp Channel ID / JID</div>
+              <div class="sr-desc">Channel invite code ya numeric newsletter JID (e.g. 120363404823253263@newsletter)</div>
             </div>
-            <input type="text" class="setting-input" id="channelIdInput" placeholder="0029VbC6FsH3wtb5UEDvrW0a" />
+            <input type="text" class="setting-input" id="channelIdInput" placeholder="120363404823253263@newsletter" />
           </div>
 
           <div class="setting-row">
             <div class="sr-info">
-              <div class="sr-label">WhatsApp Channel Link</div>
-              <div class="sr-desc">Invite link jo har notice message ke sath WhatsApp pe jayegi</div>
+              <div class="sr-label">WhatsApp Channel Invite Link</div>
+              <div class="sr-desc">Invite link jo har notice/result message ke sath WhatsApp channel pe jayegi</div>
             </div>
             <input type="text" class="setting-input" id="channelLinkInput" placeholder="https://whatsapp.com/channel/0029VbC6FsH3wtb5UEDvrW0a" />
           </div>
 
           <div class="setting-row">
             <div class="sr-info">
-              <div class="sr-label">Convert & Send Notice Image 🖼️</div>
-              <div class="sr-desc">Notice link/PDF ko high-res image ke roop me download karke bhejo</div>
+              <div class="sr-label">Send Exact PDF Document 📄</div>
+              <div class="sr-desc">Official BEU notice PDF ya result bulletin PDF seedhe channel pe bhejo</div>
+            </div>
+            <label class="toggle" for="sendPdfToggle">
+              <input type="checkbox" id="sendPdfToggle" onchange="toggleSendPdf(this.checked)" checked />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="sr-info">
+              <div class="sr-label">WhatsApp Delivery Mode 🚀</div>
+              <div class="sr-desc">Delivery preference: PDF Document (sabse behtar) ya Image visual</div>
+            </div>
+            <select class="setting-input" id="dispatchModeSelect" style="max-width:260px;" onchange="saveSettings()">
+              <option value="pdf">📄 PDF Document (Best for subscribers)</option>
+              <option value="both">📄+🖼️ Both (PDF Document + Banner)</option>
+              <option value="image">🖼️ Banner Image Only</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <div class="sr-info">
+              <div class="sr-label">Generate Visual Banner Image 🖼️</div>
+              <div class="sr-desc">PDF ka first-page preview card ya announcement banner generate karo</div>
             </div>
             <label class="toggle" for="sendImageToggle">
               <input type="checkbox" id="sendImageToggle" onchange="toggleSendImage(this.checked)" checked />
@@ -201,7 +233,7 @@
           <div class="setting-row">
             <div class="sr-info">
               <div class="sr-label">Auto Dispatch</div>
-              <div class="sr-desc">Nayi notice aane par automatically WhatsApp bhejo</div>
+              <div class="sr-desc">Nayi notice ya result aane par automatically WhatsApp pe dispatch karo</div>
             </div>
             <label class="toggle" for="autoDispatchToggle">
               <input type="checkbox" id="autoDispatchToggle" onchange="toggleAutoDispatch(this.checked)" />
@@ -217,8 +249,8 @@
           <div class="panel-hd-left">
             <span class="ph-icon">⚡</span>
             <div>
-              <h2 class="ph-title">Manual Controls</h2>
-              <p class="ph-desc">Abhi BEU check karo ya test message bhejo</p>
+              <h2 class="ph-title">Manual Controls & Direct Links</h2>
+              <p class="ph-desc">Abhi Notice Board aur result-one scan karo ya test bhejo</p>
             </div>
           </div>
         </div>
@@ -226,17 +258,22 @@
         <div class="btn-row">
           <button class="action-card ac-green" id="btnSync" onclick="syncNow()">
             <span class="ac-icon">🔄</span>
-            <span class="ac-title">BEU Check Now</span>
-            <span class="ac-desc">Abhi scan karo</span>
+            <span class="ac-title">Scan BEU Now</span>
+            <span class="ac-desc">Notice Board + result-one</span>
           </button>
           <button class="action-card ac-wa" id="btnTest" onclick="sendTestMsg()">
             <span class="ac-icon">💬</span>
             <span class="ac-title">Test Message</span>
             <span class="ac-desc">WhatsApp pe test bhejo</span>
           </button>
+          <button class="action-card ac-blue" onclick="window.open('https://beu-bih.ac.in/result-one', '_blank')">
+            <span class="ac-icon">🎓</span>
+            <span class="ac-title">result-one Portal</span>
+            <span class="ac-desc">BEU Results Dekho</span>
+          </button>
           <button class="action-card ac-amber" onclick="window.open('https://beu-bih.ac.in', '_blank')">
             <span class="ac-icon">🌐</span>
-            <span class="ac-title">BEU Website</span>
+            <span class="ac-title">BEU Main Site</span>
             <span class="ac-desc">Official site kholo</span>
           </button>
         </div>
@@ -251,7 +288,7 @@
             <span class="ph-icon">✍️</span>
             <div>
               <h2 class="ph-title">Custom Message Bhejo</h2>
-              <p class="ph-desc">Khud koi bhi message WhatsApp Channel pe bhejo</p>
+              <p class="ph-desc">Channel pe manual broadcast ya alert bhejo</p>
             </div>
           </div>
         </div>
@@ -259,16 +296,16 @@
         <div class="form-stack">
           <div class="fg">
             <label class="fl" for="msgTitle">Title (optional)</label>
-            <input type="text" id="msgTitle" class="fi" placeholder="e.g. Exam Form Notice 2026" />
+            <input type="text" id="msgTitle" class="fi" placeholder="e.g. B.Tech 8th Semester Result Notice 2026" />
           </div>
           <div class="fg">
             <label class="fl" for="msgBody">Message *</label>
-            <textarea id="msgBody" class="ft" rows="4" placeholder="Apna message yahan likho… 🚨📌🗓️" oninput="updateCount()"></textarea>
+            <textarea id="msgBody" class="ft" rows="4" placeholder="Apna message yahan likho… 🎓🚨📌🗓️" oninput="updateCount()"></textarea>
             <div class="char-row"><span id="msgCount">0</span> chars</div>
           </div>
           <div class="fg">
-            <label class="fl" for="msgLink">PDF Link (optional)</label>
-            <input type="url" id="msgLink" class="fi" placeholder="https://beu-bih.ac.in/notice/..." />
+            <label class="fl" for="msgLink">PDF / Portal Link (optional)</label>
+            <input type="url" id="msgLink" class="fi" placeholder="https://beu-bih.ac.in/result-one" />
           </div>
           <button class="btn btn-primary btn-full" id="btnSendCustom" onclick="sendCustom()">
             🚀 WhatsApp pe Bhejo
@@ -278,11 +315,11 @@
 
     </div>
 
-    <!-- RIGHT SIDEBAR: Notice Feed -->
+    <!-- RIGHT SIDEBAR: Notice & Result Feed -->
     <aside class="sidebar sidebar--right">
       <div class="card feed-card">
         <div class="feed-header">
-          <div class="card-label">LIVE NOTICES</div>
+          <div class="card-label">LIVE FEED (NOTICES & RESULTS)</div>
           <span class="live-dot">● LIVE</span>
         </div>
         <div class="notice-list" id="noticeList">
@@ -301,14 +338,14 @@
   <!-- FOOTER PILL -->
   <div class="footer-pill">
     <span class="fp-dot"></span>
-    <span id="fpText">Server chal raha hai — Auto Mode ON</span>
+    <span id="fpText">BEU Notifier Active — Notice Board & result-one Live</span>
   </div>
 
-  <!-- IMAGE PREVIEW MODAL -->
+  <!-- IMAGE & PDF PREVIEW MODAL -->
   <div class="img-modal-backdrop" id="imgModal" onclick="closeImgModal(event)" style="display:none;">
     <div class="img-modal-card">
       <div class="img-modal-header">
-        <div class="img-modal-title" id="modalTitle">Notice Image Preview</div>
+        <div class="img-modal-title" id="modalTitle">Notice & PDF Preview</div>
         <button class="modal-close-btn" onclick="closeImgModal(null, true)">✕</button>
       </div>
       <div class="img-modal-body">
@@ -316,8 +353,8 @@
       </div>
       <div class="img-modal-footer">
         <a id="modalDownloadBtn" class="btn btn-ghost btn-sm" href="" download target="_blank">💾 Download Image</a>
-        <a id="modalPdfBtn" class="btn btn-ghost btn-sm" href="" target="_blank">📄 Original PDF</a>
-        <button id="modalSendBtn" class="btn btn-primary btn-sm" onclick="sendNoticeFromModal()">🚀 WhatsApp pe Bhejo</button>
+        <a id="modalPdfBtn" class="btn btn-primary btn-sm" href="" target="_blank">📄 Open / Download PDF</a>
+        <button id="modalSendBtn" class="btn btn-wa btn-sm" onclick="sendNoticeFromModal()">🚀 Send with PDF to WA</button>
       </div>
     </div>
   </div>

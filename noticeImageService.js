@@ -194,6 +194,7 @@ async function generateAnnouncementBanner(notice, outputPath) {
       ? new Date(notice.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
       : new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
     const isUrgent = notice.isUrgent === true || notice.isimportant === 1;
+    const isResult = notice.isResult === true;
 
     const html = `
       <!DOCTYPE html>
@@ -275,6 +276,7 @@ async function generateAnnouncementBanner(notice, outputPath) {
             border: 1px solid rgba(255, 255, 255, 0.15);
             backdrop-filter: blur(8px);
           }
+          .pill-result { background: rgba(16, 185, 129, 0.25); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.5); }
           .pill-urgent { background: rgba(239, 68, 68, 0.2); color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); }
           .pill-normal { background: rgba(59, 130, 246, 0.2); color: #bfdbfe; border-color: rgba(59, 130, 246, 0.4); }
           .content {
@@ -295,7 +297,7 @@ async function generateAnnouncementBanner(notice, outputPath) {
             margin-bottom: 20px;
           }
           .notice-title {
-            font-size: 40px;
+            font-size: 38px;
             font-weight: 900;
             line-height: 1.25;
             letter-spacing: -1px;
@@ -343,15 +345,15 @@ async function generateAnnouncementBanner(notice, outputPath) {
             <div class="logo-badge">🏛️</div>
             <div class="brand-text">
               <h2>Bihar Engineering University</h2>
-              <p>Official Notification Alert</p>
+              <p>${isResult ? 'Official Result Declaration' : 'Official Notification Alert'}</p>
             </div>
           </div>
-          <div class="status-pill ${isUrgent ? 'pill-urgent' : 'pill-normal'}">
-            <span>${isUrgent ? '🚨 URGENT NOTICE' : '🔔 OFFICIAL CIRCULAR'}</span>
+          <div class="status-pill ${isResult ? 'pill-result' : isUrgent ? 'pill-urgent' : 'pill-normal'}">
+            <span>${isResult ? '🎓 RESULT DECLARED' : isUrgent ? '🚨 URGENT NOTICE' : '🔔 OFFICIAL CIRCULAR'}</span>
           </div>
         </div>
         <div class="content">
-          <div class="notice-meta">NOTICE #${notice.id || 'NEW'} &nbsp;|&nbsp; 🗓️ ${safeDate}</div>
+          <div class="notice-meta">ID: #${notice.id || 'NEW'} &nbsp;|&nbsp; 🗓️ ${safeDate}</div>
           <h1 class="notice-title">${safeTitle}</h1>
         </div>
         <div class="footer">
@@ -374,25 +376,398 @@ async function generateAnnouncementBanner(notice, outputPath) {
 }
 
 /**
- * Main export: Downloads notice link and converts it to a local image.
- * Returns { success, imagePath, relativeUrl, error }
+ * Downloads notice PDF from BEU server and saves to local media folder
  */
-async function generateNoticeImage(notice) {
-  const rawId = String(notice.id || Date.now());
-  const safeId = rawId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const imageFilename = `notice_${safeId}.png`;
-  const imagePath = path.join(MEDIA_DIR, imageFilename);
-  const relativeUrl = `/media/${imageFilename}`;
+async function downloadNoticePdf(pdfUrl, safeId) {
+  const pdfFilename = `notice_${safeId}.pdf`;
+  const pdfPath = path.join(MEDIA_DIR, pdfFilename);
+  const relativePdfUrl = `/media/${pdfFilename}`;
 
-  // If already rendered and valid, return cached image immediately
-  if (fs.existsSync(imagePath) && fs.statSync(imagePath).size > 1000) {
-    return { success: true, imagePath, relativeUrl, cached: true };
+  if (fs.existsSync(pdfPath) && fs.statSync(pdfPath).size > 1000) {
+    return { success: true, pdfPath, relativePdfUrl, cached: true };
   }
 
-  const pdfUrl = (notice.pdfLink || notice.link || '').trim();
+  try {
+    console.log(`[Notice Media] Downloading PDF from: ${pdfUrl}`);
+    const res = await httpClient.get(pdfUrl, { responseType: 'arraybuffer' });
+    const buffer = Buffer.from(res.data);
 
-  // Try 1: Download file and convert PDF or save image
-  if (pdfUrl) {
+    // Validate that it's actually a PDF or valid file
+    if (buffer.length < 500) {
+      throw new Error('Downloaded file is too small to be a valid PDF');
+    }
+
+    fs.writeFileSync(pdfPath, buffer);
+    console.log(`[Notice Media] ✅ PDF saved successfully: ${pdfPath} (${buffer.length} bytes)`);
+    return { success: true, pdfPath, relativePdfUrl, buffer, size: buffer.length };
+  } catch (err) {
+    console.warn(`[Notice Media] Download PDF error for #${safeId}: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Generates an official BEU Result Declaration Bulletin PDF for results declared on result-one
+ */
+async function generateResultPdf(exam) {
+  const rawId = String(exam.id || Date.now());
+  const cleanId = rawId.replace(/^result_/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const pdfFilename = `result_${cleanId}.pdf`;
+  const imageFilename = `result_${cleanId}.png`;
+  const pdfPath = path.join(MEDIA_DIR, pdfFilename);
+  const imagePath = path.join(MEDIA_DIR, imageFilename);
+  const relativePdfUrl = `/media/${pdfFilename}`;
+  const relativeImageUrl = `/media/${imageFilename}`;
+
+  if (fs.existsSync(pdfPath) && fs.statSync(pdfPath).size > 1000) {
+    return {
+      success: true,
+      pdfPath,
+      imagePath: fs.existsSync(imagePath) ? imagePath : null,
+      relativePdfUrl,
+      relativeImageUrl,
+      cached: true
+    };
+  }
+
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+
+  try {
+    await page.setViewport({ width: 1200, height: 1600, deviceScaleFactor: 2 });
+
+    const publishDateStr = exam.publishDate
+      ? new Date(exam.publishDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+      : new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    const examTitle = exam.examName || exam.title || 'BEU Examination Result';
+    const course = exam.courseName || exam.course || 'B.Tech / Technical';
+    const session = exam.session || 'Academic Session';
+    const batchYear = exam.batchYear || '';
+    const examHeld = exam.examHeld || 'Recent Exam';
+    const semId = exam.semId || '-';
+    const examId = exam.examId || 'BEU';
+
+    const html = `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Plus Jakarta Sans', sans-serif; }
+          body {
+            width: 800px;
+            margin: 0 auto;
+            background: #ffffff;
+            color: #0f172a;
+            padding: 48px 44px;
+          }
+          .header {
+            text-align: center;
+            padding-bottom: 24px;
+            border-bottom: 3px double #0284c7;
+            margin-bottom: 28px;
+          }
+          .univ-name-en {
+            font-size: 24px;
+            font-weight: 900;
+            color: #0369a1;
+            letter-spacing: -0.5px;
+            text-transform: uppercase;
+          }
+          .univ-name-hi {
+            font-size: 17px;
+            font-weight: 700;
+            color: #475569;
+            margin-top: 4px;
+          }
+          .univ-sub {
+            font-size: 11px;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            margin-top: 6px;
+          }
+          .badge-box {
+            display: inline-block;
+            background: #ecfdf5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+            font-weight: 800;
+            font-size: 13px;
+            padding: 6px 18px;
+            border-radius: 999px;
+            margin-top: 14px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+          }
+          .bulletin-title {
+            font-size: 20px;
+            font-weight: 800;
+            color: #0f172a;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+          }
+          .details-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 26px;
+            background: #f8fafc;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #e2e8f0;
+          }
+          .details-table td {
+            padding: 13px 18px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 14px;
+          }
+          .details-table tr:last-child td {
+            border-bottom: none;
+          }
+          .details-table td.label {
+            width: 32%;
+            font-weight: 700;
+            color: #475569;
+            background: #f1f5f9;
+          }
+          .details-table td.value {
+            font-weight: 800;
+            color: #0f172a;
+          }
+          .highlight {
+            color: #0369a1;
+            font-size: 15px;
+          }
+          .instruction-card {
+            background: #f0fdf4;
+            border: 1px solid #86efac;
+            border-radius: 12px;
+            padding: 20px 22px;
+            margin-bottom: 26px;
+          }
+          .inst-hd {
+            font-weight: 800;
+            color: #166534;
+            font-size: 14px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          .inst-list {
+            list-style: none;
+            counter-reset: inst-counter;
+          }
+          .inst-list li {
+            counter-increment: inst-counter;
+            margin-bottom: 8px;
+            font-size: 13px;
+            color: #1e293b;
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            line-height: 1.4;
+          }
+          .inst-list li::before {
+            content: counter(inst-counter);
+            background: #22c55e;
+            color: white;
+            font-weight: 800;
+            font-size: 11px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            margin-top: 1px;
+          }
+          .link-box {
+            background: #0284c7;
+            color: white;
+            border-radius: 10px;
+            padding: 14px 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 26px;
+          }
+          .link-url {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            font-weight: 700;
+            word-break: break-all;
+          }
+          .footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 18px;
+            border-top: 1px solid #e2e8f0;
+            font-size: 12px;
+            color: #64748b;
+          }
+          .footer b { color: #0f172a; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="univ-name-en">Bihar Engineering University, Patna</div>
+          <div class="univ-name-hi">बिहार अभियंत्रण विश्वविद्यालय, पटना</div>
+          <div class="univ-sub">Official Examination Result Declaration Bulletin</div>
+          <div class="badge-box">🎓 Official Result Published</div>
+        </div>
+
+        <div class="bulletin-title">
+          <span>📢</span>
+          <span>${examTitle}</span>
+        </div>
+
+        <table class="details-table">
+          <tr>
+            <td class="label">Course Name</td>
+            <td class="value highlight">${course}</td>
+          </tr>
+          <tr>
+            <td class="label">Examination</td>
+            <td class="value">${examTitle}</td>
+          </tr>
+          <tr>
+            <td class="label">Academic Session</td>
+            <td class="value">${session} ${batchYear ? `(Batch: ${batchYear})` : ''}</td>
+          </tr>
+          <tr>
+            <td class="label">Examination Held</td>
+            <td class="value">${examHeld}</td>
+          </tr>
+          <tr>
+            <td class="label">Publication Date</td>
+            <td class="value">${publishDateStr}</td>
+          </tr>
+          <tr>
+            <td class="label">Semester / Exam ID</td>
+            <td class="value">Semester ${semId} &nbsp;|&nbsp; ID: ${examId}</td>
+          </tr>
+        </table>
+
+        <div class="instruction-card">
+          <div class="inst-hd">
+            <span>ℹ️</span>
+            <span>How to Check Your Individual Marksheet Online</span>
+          </div>
+          <ol class="inst-list">
+            <li>Visit the official BEU Result Portal: <b>https://beu-bih.ac.in/result-one</b></li>
+            <li>Find and click on <b>${examTitle}</b>.</li>
+            <li>Enter your <b>BEU Registration Number</b> in the search box.</li>
+            <li>Complete the Captcha verification and click <b>Show Result</b> to view your SGPA/CGPA.</li>
+          </ol>
+        </div>
+
+        <div class="link-box">
+          <div>
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; opacity: 0.9; margin-bottom: 2px;">Official Result Link</div>
+            <div class="link-url">https://beu-bih.ac.in/result-one</div>
+          </div>
+          <div style="font-size: 24px;">🌐</div>
+        </div>
+
+        <div class="footer">
+          <div>🏛️ <b>BEU Patna (Bihar)</b> &nbsp;•&nbsp; Automated Notification System</div>
+          <div>📢 <b>Apna College Bihar</b> WhatsApp Channel Update</div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    await page.pdf({
+      path: pdfPath,
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' }
+    });
+
+    console.log(`[Result Media] ✅ Result PDF created: ${pdfPath}`);
+
+    // Generate announcement banner card image for this result
+    try {
+      await generateAnnouncementBanner({
+        id: safeId,
+        title: examTitle,
+        date: exam.publishDate,
+        isResult: true,
+        isUrgent: false
+      }, imagePath);
+    } catch {}
+
+    return {
+      success: true,
+      pdfPath,
+      imagePath: fs.existsSync(imagePath) ? imagePath : null,
+      relativePdfUrl,
+      relativeImageUrl: fs.existsSync(imagePath) ? relativeImageUrl : null
+    };
+
+  } catch (err) {
+    console.error(`[Result Media] ❌ Error generating result PDF: ${err.message}`);
+    return { success: false, error: err.message };
+  } finally {
+    try { await page.close(); } catch {}
+  }
+}
+
+/**
+ * Main export: Downloads notice link and converts it to local image & PDF.
+ * Returns { success, imagePath, relativeUrl, pdfPath, relativePdfUrl, isBanner, isResult, error }
+ */
+async function generateNoticeImage(notice) {
+  // If this is a result declaration from result-one
+  if (notice.isResult === true || String(notice.id).startsWith('result_')) {
+    return await generateResultPdf(notice);
+  }
+
+  const rawId = String(notice.id || Date.now());
+  const safeId = rawId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const cleanId = safeId.replace(/^(notice_|routine_)/, '');
+  const prefix = safeId.startsWith('routine_') ? 'routine_' : 'notice_';
+  const imageFilename = `${prefix}${cleanId}.png`;
+  const pdfFilename = `${prefix}${cleanId}.pdf`;
+  const imagePath = path.join(MEDIA_DIR, imageFilename);
+  const pdfPath = path.join(MEDIA_DIR, pdfFilename);
+  const relativeUrl = `/media/${imageFilename}`;
+  const relativePdfUrl = `/media/${pdfFilename}`;
+
+  // Check if both image and PDF already exist
+  const hasImage = fs.existsSync(imagePath) && fs.statSync(imagePath).size > 1000;
+  const hasPdf = fs.existsSync(pdfPath) && fs.statSync(pdfPath).size > 1000;
+
+  if (hasImage && hasPdf) {
+    return {
+      success: true,
+      imagePath,
+      relativeUrl,
+      pdfPath,
+      relativePdfUrl,
+      cached: true
+    };
+  }
+
+  const rawUrl = (notice.pdfLink || notice.link || '').trim();
+  let pdfUrl = rawUrl;
+
+  // Resolve relative backend PDF URL if needed
+  if (pdfUrl && !pdfUrl.startsWith('http://') && !pdfUrl.startsWith('https://')) {
+    pdfUrl = `https://beu-bih.ac.in/backend/${encodeURIComponent(pdfUrl)}`;
+  }
+
+  // Try 1: Download official file from BEU and save as PDF / render image
+  if (pdfUrl && pdfUrl.startsWith('http')) {
     try {
       console.log(`[Notice Media] Downloading notice from: ${pdfUrl}`);
       const res = await httpClient.get(pdfUrl, { responseType: 'arraybuffer' });
@@ -403,19 +778,33 @@ async function generateNoticeImage(notice) {
       if (contentType.includes('image') || pdfUrl.match(/\.(png|jpe?g|webp|gif)$/i)) {
         fs.writeFileSync(imagePath, buffer);
         console.log(`[Notice Media] Saved direct image: ${imagePath}`);
-        return { success: true, imagePath, relativeUrl };
+        return { success: true, imagePath, relativeUrl, pdfPath: null };
       }
 
-      // If server returned PDF
-      const pdfPath = path.join(MEDIA_DIR, `notice_${safeId}.pdf`);
+      // Save official PDF
       fs.writeFileSync(pdfPath, buffer);
+      console.log(`[Notice Media] Saved official PDF: ${pdfPath} (${buffer.length} bytes)`);
 
+      // Render first page of PDF to image for channel banner preview
       console.log(`[Notice Media] Rendering PDF to image using PDF.js (${buffer.length} bytes)...`);
       await renderPdfToImage(buffer, imagePath);
 
       if (fs.existsSync(imagePath) && fs.statSync(imagePath).size > 1000) {
-        console.log(`[Notice Media] ✅ PDF rendered successfully: ${imagePath}`);
-        return { success: true, imagePath, relativeUrl };
+        console.log(`[Notice Media] ✅ PDF & Image rendered successfully: ${imagePath}`);
+        return {
+          success: true,
+          imagePath,
+          relativeUrl,
+          pdfPath,
+          relativePdfUrl
+        };
+      } else {
+        return {
+          success: true,
+          imagePath: null,
+          pdfPath,
+          relativePdfUrl
+        };
       }
     } catch (err) {
       console.warn(`[Notice Media] PDF download/render warning (${err.message}). Generating announcement card...`);
@@ -428,55 +817,91 @@ async function generateNoticeImage(notice) {
     await generateAnnouncementBanner(notice, imagePath);
     if (fs.existsSync(imagePath) && fs.statSync(imagePath).size > 1000) {
       console.log(`[Notice Media] ✅ Announcement card ready: ${imagePath}`);
-      return { success: true, imagePath, relativeUrl, isBanner: true };
+      return {
+        success: true,
+        imagePath,
+        relativeUrl,
+        pdfPath: fs.existsSync(pdfPath) ? pdfPath : null,
+        relativePdfUrl: fs.existsSync(pdfPath) ? relativePdfUrl : null,
+        isBanner: true
+      };
     }
   } catch (err) {
     console.error(`[Notice Media] ❌ Banner generation failed: ${err.message}`);
   }
 
-  return { success: false, imagePath: null, error: 'Could not generate image' };
+  return { success: false, imagePath: null, pdfPath: null, error: 'Could not generate image or PDF' };
 }
 
 /**
  * Builds the WhatsApp caption with:
- * 1. Title and date
+ * 1. Title, course, semester and date
  * 2. Original Notice / PDF Download link
  * 3. User's WhatsApp Channel Link
  */
-function buildCaption({ title, pdfLink, date, isUrgent, channelLink }) {
+function buildCaption({
+  title,
+  pdfLink,
+  date,
+  isUrgent,
+  channelLink,
+  isResult = false,
+  course = '',
+  session = '',
+  examHeld = ''
+}) {
   const dateStr = date
     ? new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
     : new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
 
-  const lines = [
-    isUrgent ? '🚨 *URGENT BEU NOTICE*' : '🔔 *New BEU Notice*',
-    '',
-    `📌 *${(title || 'BEU Notice').trim()}*`,
-    `🗓️ *Date:* ${dateStr}`,
-    ''
-  ];
+  const lines = [];
 
-  if (pdfLink && pdfLink.trim()) {
-    lines.push('📄 *Download Official Notice PDF:*');
-    lines.push(`👉 ${pdfLink.trim()}`);
+  if (isResult) {
+    lines.push('🎓 *BEU RESULT DECLARED!* 🚨');
     lines.push('');
+    lines.push(`📌 *${(title || 'BEU Result Declared').trim()}*`);
+    if (course) lines.push(`🏛️ *Course:* ${course}`);
+    if (session) lines.push(`📚 *Session:* ${session}`);
+    if (examHeld) lines.push(`🗓️ *Exam Held:* ${examHeld}`);
+    lines.push(`📅 *Published Date:* ${dateStr}`);
+    lines.push('');
+    lines.push('🌐 *Check Your Result Online:*');
+    lines.push('👉 https://beu-bih.ac.in/result-one');
+    lines.push('');
+    lines.push('📄 *Official Result Notification PDF attached below ⬇️*');
+  } else {
+    lines.push(isUrgent ? '🚨 *URGENT BEU NOTICE*' : '🔔 *New BEU Official Notice*');
+    lines.push('');
+    lines.push(`📌 *${(title || 'BEU Notice').trim()}*`);
+    lines.push(`🗓️ *Date:* ${dateStr}`);
+    lines.push('');
+
+    if (pdfLink && pdfLink.trim()) {
+      lines.push('📄 *Download Official PDF:*');
+      lines.push(`👉 ${pdfLink.trim()}`);
+      lines.push('');
+    }
+    lines.push('📄 *Official Notice PDF attached below ⬇️*');
   }
 
+  lines.push('');
   if (channelLink && channelLink.trim()) {
-    lines.push('📢 *Join WhatsApp Channel for Updates:*');
+    lines.push('📢 *Join WhatsApp Channel for Fastest Updates:*');
     lines.push(`👉 ${channelLink.trim()}`);
     lines.push('');
   }
 
   lines.push('━━━━━━━━━━━━━━━━━━━━━');
-  lines.push('🎓 *Apna College Bihar* | BEU Patna');
-  lines.push('#BEU #BiharEngineering #Notice #Exam #Semester');
+  lines.push('🎓 *Apna College Bihar* | Bihar Engineering University, Patna');
+  lines.push('#BEU #BiharEngineering #Result #Notice #BEUUpdate');
 
   return lines.join('\n');
 }
 
 module.exports = {
   generateNoticeImage,
+  generateResultPdf,
+  downloadNoticePdf,
   buildCaption,
   renderPdfToImage,
   generateAnnouncementBanner,

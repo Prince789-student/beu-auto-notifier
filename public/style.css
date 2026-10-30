@@ -527,6 +527,19 @@ body {
 .ac-amber { border-color: rgba(217,119,6,.25); background: rgba(217,119,6,.06); }
 .ac-amber:hover { background: rgba(217,119,6,.12); }
 
+.ac-blue { border-color: rgba(2,132,199,.25); background: rgba(2,132,199,.06); }
+.ac-blue:hover { background: rgba(2,132,199,.12); }
+
+.ni-tag--result {
+  background: rgba(16, 185, 129, 0.15) !important;
+  color: #059669 !important;
+  border-color: rgba(16, 185, 129, 0.3) !important;
+}
+
+.notice-item--result {
+  border-left: 3px solid #10b981;
+}
+
 .ac-icon { font-size: 22px; }
 .ac-title { font-size: 13px; font-weight: 600; color: var(--text-1); }
 .ac-desc  { font-size: 11px; color: var(--text-3); }
