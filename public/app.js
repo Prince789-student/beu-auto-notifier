@@ -3,7 +3,9 @@
  * Connects ONLY to localhost (own server) — zero external dependency
  */
 
-const API = ''; // Same origin — server pe hi chal raha hai
+const API = (window.location.protocol === 'file:' || (window.location.port !== '3001' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')))
+  ? 'http://localhost:3001'
+  : '';
 
 let lastPollTime = Date.now();
 let lastNoticeSet = new Set();

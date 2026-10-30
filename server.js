@@ -24,6 +24,16 @@ const {
 
 const app = express();
 app.use(express.json());
+
+// Enable CORS for dashboard access from any client/origin
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 3001;
@@ -33,6 +43,10 @@ const DATA_FILE = path.join(__dirname, 'data', 'notices.json');
 const SETTINGS_FILE = path.join(__dirname, 'data', 'settings.json');
 const AUTH_FOLDER = path.join(__dirname, 'auth_info');
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL_MINUTES || '2');
+
+// Default Apna College Bihar Newsletter JID
+const DEFAULT_CHANNEL_JID = '120363404823253263@newsletter';
+const DEFAULT_CHANNEL_LINK = 'https://whatsapp.com/channel/0029VbC6FsH3wtb5UEDvrW0a';
 
 // MongoDB
 let mongoClient = null;
@@ -52,39 +66,56 @@ let isChecking = false;
 let totalSentToday = 0;
 let serverStartTime = new Date();
 let reconnectTimer = null;
+let resolvedChannelJid = DEFAULT_CHANNEL_JID;
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 function loadNotices() {
   try { if (fs.existsSync(DATA_FILE)) return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch {}
   return {};
 }
-function saveNotices(data) { fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8'); }
+
+function saveNotices(data) {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (err) {
+    log(`⚠️ Notices save error: ${err.message}`);
+  }
+}
+
 function loadSettings() {
   try {
     if (fs.existsSync(SETTINGS_FILE)) {
       const s = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
       return {
         autoDispatch: s.autoDispatch !== undefined ? s.autoDispatch : (process.env.AUTO_DISPATCH !== 'false'),
-        channelId: s.channelId !== undefined ? s.channelId : (process.env.WHATSAPP_CHANNEL_ID || '0029VbC6FsH3wtb5UEDvrW0a'),
-        channelLink: s.channelLink !== undefined ? s.channelLink : (process.env.WHATSAPP_CHANNEL_LINK || 'https://whatsapp.com/channel/0029VbC6FsH3wtb5UEDvrW0a'),
+        channelId: s.channelId !== undefined ? s.channelId : (process.env.WHATSAPP_CHANNEL_ID || DEFAULT_CHANNEL_JID),
+        channelLink: s.channelLink !== undefined ? s.channelLink : (process.env.WHATSAPP_CHANNEL_LINK || DEFAULT_CHANNEL_LINK),
         sendImage: s.sendImage !== undefined ? s.sendImage : (process.env.AUTO_SEND_IMAGE !== 'false')
       };
     }
   } catch {}
   return {
     autoDispatch: process.env.AUTO_DISPATCH !== 'false',
-    channelId: process.env.WHATSAPP_CHANNEL_ID || '0029VbC6FsH3wtb5UEDvrW0a',
-    channelLink: process.env.WHATSAPP_CHANNEL_LINK || 'https://whatsapp.com/channel/0029VbC6FsH3wtb5UEDvrW0a',
+    channelId: process.env.WHATSAPP_CHANNEL_ID || DEFAULT_CHANNEL_JID,
+    channelLink: process.env.WHATSAPP_CHANNEL_LINK || DEFAULT_CHANNEL_LINK,
     sendImage: process.env.AUTO_SEND_IMAGE !== 'false'
   };
 }
-function saveSettings(data) { fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8'); }
+
+function saveSettings(data) {
+  try {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (err) {
+    log(`⚠️ Settings save error: ${err.message}`);
+  }
+}
+
 function log(msg) {
   const t = new Date().toLocaleTimeString('en-IN', { hour12: false });
   console.log(`[${t}] ${msg}`);
 }
 
-// ─── WhatsApp via Baileys (No Chrome!) ────────────────────────────────────
+// ─── WhatsApp via Baileys ─────────────────────────────────────────────────
 async function initWhatsApp() {
   if (waStatus === 'connecting' || waStatus === 'connected') return;
 
@@ -92,7 +123,6 @@ async function initWhatsApp() {
   waStatus = 'connecting';
 
   try {
-    // MongoDB auth — ya fallback to file
     let authState, saveCreds;
     if (mongoDb) {
       log('🍃 MongoDB session use ho rahi hai...');
@@ -111,7 +141,7 @@ async function initWhatsApp() {
     const sock = makeWASocket({
       version,
       auth: authState,
-      logger: pino({ level: 'silent' }), // Quiet logs
+      logger: pino({ level: 'silent' }),
       printQRInTerminal: false,
       browser: ['BEU Notifier', 'Chrome', '1.0'],
       connectTimeoutMs: 60000,
@@ -124,7 +154,6 @@ async function initWhatsApp() {
     waSocket = sock;
 
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-      // QR Code mila — frontend ko denge
       if (qr) {
         log('📷 QR code ready — dashboard pe scan karein!');
         waStatus = 'qr_ready';
@@ -144,6 +173,18 @@ async function initWhatsApp() {
         waStatus = 'connected';
         waQrDataUrl = null;
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+
+        // Pre-resolve Channel JID
+        const s = loadSettings();
+        if (s.channelId) {
+          getChannelJid(s.channelId).catch(() => {});
+        }
+
+        // Trigger immediate check to send any pending or new notices!
+        setTimeout(() => {
+          log('🚀 WhatsApp ready — checking for new or pending notices...');
+          checkAndBroadcast();
+        }, 3000);
       }
 
       if (connection === 'close') {
@@ -175,25 +216,23 @@ async function initWhatsApp() {
   }
 }
 
-let resolvedChannelJid = null;
-
 async function getChannelJid(input) {
-  if (!input) return null;
-  const cleaned = input.trim();
-  
+  const current = (input || '').trim();
+  if (!current) return resolvedChannelJid;
+
   // If already numeric newsletter JID
-  if (cleaned.endsWith('@newsletter') && /^\d+@newsletter$/.test(cleaned)) {
-    resolvedChannelJid = cleaned;
-    return cleaned;
+  if (current.endsWith('@newsletter') && /^\d+@newsletter$/.test(current)) {
+    resolvedChannelJid = current;
+    return current;
   }
-  if (/^\d+$/.test(cleaned)) {
-    resolvedChannelJid = `${cleaned}@newsletter`;
+  if (/^\d+$/.test(current)) {
+    resolvedChannelJid = `${current}@newsletter`;
     return resolvedChannelJid;
   }
 
   // Extract invite code from URL or string
-  const match = cleaned.match(/(?:whatsapp\.com\/channel\/)?([0-9A-Za-z_-]{20,})/);
-  const code = match ? match[1] : cleaned;
+  const match = current.match(/(?:whatsapp\.com\/channel\/)?([0-9A-Za-z_-]{20,})/);
+  const code = match ? match[1] : current;
 
   if (waSocket && typeof waSocket.newsletterMetadata === 'function') {
     try {
@@ -202,7 +241,7 @@ async function getChannelJid(input) {
       if (meta && meta.id) {
         resolvedChannelJid = meta.id;
         const role = meta.viewer_metadata?.role || 'UNKNOWN';
-        log(`📢 Channel found: "${meta.name || meta.thread_metadata?.name || 'Channel'}" | JID: ${meta.id} | Role: ${role}`);
+        log(`📢 Channel found: "${meta.thread_metadata?.name?.text || meta.name || 'Channel'}" | JID: ${meta.id} | Role: ${role}`);
         return resolvedChannelJid;
       }
     } catch (err) {
@@ -210,13 +249,13 @@ async function getChannelJid(input) {
     }
   }
 
-  return cleaned.includes('@') ? cleaned : `${cleaned}@newsletter`;
+  return resolvedChannelJid || (current.includes('@') ? current : `${current}@newsletter`);
 }
 
 // ─── Send to WhatsApp Channel ─────────────────────────────────────────────
 async function sendToWhatsApp(caption, imagePath = null) {
   if (!waSocket || waStatus !== 'connected') {
-    return { success: false, reason: 'WhatsApp not connected' };
+    return { success: false, reason: `WhatsApp not connected (status: ${waStatus})` };
   }
 
   const settings = loadSettings();
@@ -261,7 +300,7 @@ async function sendToWhatsApp(caption, imagePath = null) {
 
 // ─── BEU Notice Checker ────────────────────────────────────────────────────
 async function checkAndBroadcast(forceAll = false) {
-  if (isChecking) return { skipped: true };
+  if (isChecking) return { skipped: true, reason: 'Already in progress' };
   isChecking = true;
   lastCheckTime = new Date().toISOString();
   log('🔍 BEU check chal raha hai...');
@@ -275,15 +314,36 @@ async function checkAndBroadcast(forceAll = false) {
     const raw = Array.isArray(res.data) ? res.data : [];
     log(`📋 ${raw.length} notices BEU se mili`);
 
-    for (const n of raw.slice(0, 15)) {
-      const id = String(n.id);
-      if (localCache[id] && !forceAll) continue;
+    // Process top 15 notices in chronological order (oldest to newest)
+    const recentNotices = raw.slice(0, 15).reverse();
 
-      newCount++;
+    for (const n of recentNotices) {
+      const id = String(n.id);
+      const cached = localCache[id];
+
+      // If already successfully dispatched, skip unless forceAll is requested
+      if (cached && cached.dispatched && !forceAll) {
+        continue;
+      }
+
       const title = (n.board || 'BEU Notice').trim();
       const link = n.link ? `https://beu-bih.ac.in/backend/${encodeURIComponent(n.link.trim())}` : '';
       const date = n.noticedate || new Date().toISOString().split('T')[0];
       const isUrgent = n.isimportant === 1;
+
+      // Skip ancient notices (> 14 days old) on fresh discovery so we don't spam
+      const noticeAgeDays = (Date.now() - new Date(date).getTime()) / (1000 * 60 * 60 * 24);
+      if (noticeAgeDays > 14 && !forceAll && !cached) {
+        localCache[id] = {
+          id, title, pdfLink: link, date, isUrgent,
+          dispatched: true, archived: true,
+          createdAt: new Date().toISOString()
+        };
+        saveNotices(localCache);
+        continue;
+      }
+
+      newCount++;
 
       // 1. Build caption with notice link + user's WhatsApp channel link
       const caption = buildNoticeCaption({
@@ -294,13 +354,20 @@ async function checkAndBroadcast(forceAll = false) {
         channelLink: settings.channelLink
       });
 
-      // 2. Download and convert notice link into an image
-      let imageAsset = { success: false, imagePath: null, relativeUrl: null };
-      try {
-        log(`🖼️ Notice #${id} ke liye image generate/download ho rahi hai...`);
-        imageAsset = await generateNoticeImage({ id, title, pdfLink: link, date, isUrgent });
-      } catch (imgErr) {
-        log(`⚠️ Image generation error for #${id}: ${imgErr.message}`);
+      // 2. Reuse existing image or generate
+      let imageAsset = {
+        success: !!(cached?.imagePath && fs.existsSync(cached.imagePath)),
+        imagePath: cached?.imagePath || null,
+        relativeUrl: cached?.imageUrl || null
+      };
+
+      if (!imageAsset.success) {
+        try {
+          log(`🖼️ Notice #${id} ke liye image generate/download ho rahi hai...`);
+          imageAsset = await generateNoticeImage({ id, title, pdfLink: link, date, isUrgent });
+        } catch (imgErr) {
+          log(`⚠️ Image generation error for #${id}: ${imgErr.message}`);
+        }
       }
 
       localCache[id] = {
@@ -310,32 +377,41 @@ async function checkAndBroadcast(forceAll = false) {
         date,
         isUrgent,
         caption,
-        imageUrl: imageAsset.relativeUrl || null,
-        imagePath: imageAsset.imagePath || null,
-        dispatched: false,
-        createdAt: new Date().toISOString()
+        imageUrl: imageAsset.relativeUrl || cached?.imageUrl || null,
+        imagePath: imageAsset.imagePath || cached?.imagePath || null,
+        dispatched: cached?.dispatched || false,
+        createdAt: cached?.createdAt || new Date().toISOString()
       };
       saveNotices(localCache);
 
+      // 3. Dispatch to WhatsApp channel
       if (settings.autoDispatch && settings.channelId) {
+        if (!waSocket || waStatus !== 'connected') {
+          log(`⏳ WhatsApp connect nahi hai — Notice #${id} queued rahegi`);
+          continue;
+        }
+
         const imageToSend = (settings.sendImage !== false && imageAsset.success) ? imageAsset.imagePath : null;
         const r = await sendToWhatsApp(caption, imageToSend);
         localCache[id].dispatched = r.success;
         localCache[id].dispatchedAt = new Date().toISOString();
         localCache[id].sentWithImage = !!r.hasImage;
+        if (!r.success) {
+          localCache[id].lastError = r.reason;
+        }
         saveNotices(localCache);
 
         if (r.success) {
           sentCount++;
-          log(`✅ Sent to WA: ${title} (image: ${r.hasImage ? 'YES' : 'NO'})`);
+          log(`✅ Sent to WA: Notice #${id} - ${title} (image: ${r.hasImage ? 'YES' : 'NO'})`);
         } else {
-          log(`⚠️ Send failed: ${r.reason}`);
+          log(`⚠️ Send failed for Notice #${id}: ${r.reason}`);
         }
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 2500));
       }
     }
 
-    log(`✅ Check done — ${newCount} new, ${sentCount} sent`);
+    log(`✅ Check done — ${newCount} checked, ${sentCount} sent`);
     return { success: true, newCount, sentCount };
 
   } catch (err) {
@@ -346,11 +422,6 @@ async function checkAndBroadcast(forceAll = false) {
   }
 }
 
-function buildCaption(opts) {
-  const settings = loadSettings();
-  return buildNoticeCaption({ ...opts, channelLink: settings.channelLink });
-}
-
 // ─── Cron ──────────────────────────────────────────────────────────────────
 cron.schedule(`*/${CHECK_INTERVAL} * * * *`, () => {
   log(`⏰ Auto check...`);
@@ -359,14 +430,20 @@ cron.schedule(`*/${CHECK_INTERVAL} * * * *`, () => {
 log(`✅ Cron scheduled: har ${CHECK_INTERVAL} minute`);
 
 // ─── API Routes ────────────────────────────────────────────────────────────
-app.get('/api/health', (req, res) => res.json({ ok: true }));
+app.get('/api/health', (req, res) => res.json({ ok: true, status: 'online', time: new Date().toISOString() }));
 
 app.get('/api/status', (req, res) => {
   const s = loadSettings();
   const n = Object.values(loadNotices()).filter(x => x.id);
   res.json({
-    waStatus, hasQr: !!waQrDataUrl, lastCheckTime, isChecking,
-    totalSentToday, autoDispatch: s.autoDispatch,
+    ok: true,
+    serverOnline: true,
+    waStatus,
+    hasQr: !!waQrDataUrl,
+    lastCheckTime,
+    isChecking,
+    totalSentToday,
+    autoDispatch: s.autoDispatch,
     channelId: s.channelId ? '✓ Set' : '✗ Not set',
     totalNotices: n.length,
     sentNotices: n.filter(x => x.dispatched).length,
@@ -383,7 +460,7 @@ app.get('/api/qr', (req, res) => {
 app.get('/api/notices', (req, res) => {
   const list = Object.values(loadNotices())
     .filter(n => n.id)
-    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .sort((a, b) => parseInt(b.id || 0) - parseInt(a.id || 0))
     .slice(0, 50);
   res.json({ success: true, count: list.length, notices: list });
 });
@@ -400,7 +477,6 @@ app.post('/api/send-custom', async (req, res) => {
   const settings = loadSettings();
   let fullMessage = message;
 
-  // Append links if not already in message
   if (pdfLink && !fullMessage.includes(pdfLink)) {
     fullMessage += `\n\n📄 *Notice Link:*\n👉 ${pdfLink}`;
   }
@@ -460,7 +536,7 @@ app.post('/api/notices/:id/send', async (req, res) => {
   res.json({ success: result.success, result, notice: localCache[id] });
 });
 
-// Re-generate or generate image for a notice
+// Re-generate image for a notice
 app.post('/api/notices/:id/generate-image', async (req, res) => {
   const { id } = req.params;
   const localCache = loadNotices();
@@ -491,14 +567,13 @@ app.get('/api/channel/info', async (req, res) => {
     return res.json({ connected: false, error: 'WhatsApp not connected' });
   }
   const settings = loadSettings();
-  const rawId = settings.channelId || '';
-  const match = rawId.match(/(?:whatsapp\.com\/channel\/)?([0-9A-Za-z_-]{20,})/);
-  const code = match ? match[1] : rawId;
+  const rawId = settings.channelId || DEFAULT_CHANNEL_JID;
   try {
-    const meta = await waSocket.newsletterMetadata('invite', code);
-    res.json({ success: true, rawId, code, meta });
+    const jid = await getChannelJid(rawId);
+    const meta = await waSocket.newsletterMetadata('jid', jid);
+    res.json({ success: true, rawId, jid, meta });
   } catch (err) {
-    res.json({ success: false, rawId, code, error: err.message });
+    res.json({ success: false, rawId, error: err.message });
   }
 });
 
@@ -563,7 +638,6 @@ app.post('/api/wa/reset-scanner', async (req, res) => {
     }
   }
 
-  // Fresh WhatsApp socket init for new QR scan
   setTimeout(() => {
     initWhatsApp();
   }, 1000);
@@ -579,7 +653,6 @@ app.listen(PORT, () => {
   log(`📡 BEU auto-check: har ${CHECK_INTERVAL} min`);
 });
 
-// Connect MongoDB then start WhatsApp
 async function start() {
   if (MONGODB_URI) {
     try {
@@ -596,7 +669,7 @@ async function start() {
     log('ℹ️ MONGODB_URI nahi mila — file session use ho rahi hai');
   }
 
-  // Auto-connect WhatsApp
+  // Auto-connect WhatsApp if session exists
   setTimeout(() => {
     const hasFileSession = fs.existsSync(AUTH_FOLDER) && fs.readdirSync(AUTH_FOLDER).length > 0;
     if (mongoDb || hasFileSession) {
@@ -605,7 +678,7 @@ async function start() {
     } else {
       log('ℹ️ Dashboard se WhatsApp connect karein');
     }
-  }, 2000);
+  }, 1500);
 }
 
 start();

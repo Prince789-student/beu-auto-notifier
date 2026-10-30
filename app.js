@@ -1,571 +1,564 @@
 /**
- * AutoNotify — BEU Command Center
- * Standalone admin dashboard for controlling BEU auto-notifications
- * Connects to: https://apnacollegebihar.online (production server)
+ * BEU Auto Notifier — Standalone Dashboard JS
+ * Connects ONLY to localhost (own server) — zero external dependency
  */
 
-// ═══════════════════════════════════
-// CONFIG — Change API_BASE if running locally
-// ═══════════════════════════════════
-const API_BASE = 'https://apnacollegebihar.online';
+const API = (window.location.protocol === 'file:' || (window.location.port !== '3001' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')))
+  ? 'http://localhost:3001'
+  : '';
 
-// ═══════════════════════════════════
-// STATE
-// ═══════════════════════════════════
-let serverOnline = false;
-let noticeData = [];
-let pushSubscription = null;
-let pollInterval = null;
-let lastNoticeIds = new Set();
-let nextCheckTimer = null;
+let lastPollTime = Date.now();
+let lastNoticeSet = new Set();
+let checkInterval = 2; // minutes
 
-// ═══════════════════════════════════
-// INIT
-// ═══════════════════════════════════
+// ── Init ──────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   startClock();
-  checkServerHealth();
-  loadConfig();
+  checkStatus();
   loadNotices();
+  loadSettings();
 
-  // Re-check server every 30s
-  setInterval(checkServerHealth, 30000);
-
-  // Poll for new notices every 2 minutes (mirrors server cron)
-  pollInterval = setInterval(() => {
-    loadNotices(true);
-  }, 120000);
-
-  updateNextCheckTime();
-  setInterval(updateNextCheckTime, 1000);
-
-  checkBrowserPushStatus();
+  setInterval(checkStatus, 15000);
+  setInterval(() => { loadNotices(true); }, 120000);
+  setInterval(updateCountdown, 1000);
+  updateCountdown();
 });
 
-// ═══════════════════════════════════
-// CLOCK
-// ═══════════════════════════════════
+// ── Clock ─────────────────────────────────────────────────────────────────
 function startClock() {
-  function tick() {
-    const now = new Date();
-    document.getElementById('headerTime').textContent =
-      now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-  }
+  const el = document.getElementById('headerClock');
+  const tick = () => {
+    el.textContent = new Date().toLocaleTimeString('en-IN', { hour12: false });
+  };
   tick();
   setInterval(tick, 1000);
 }
 
-// ═══════════════════════════════════
-// NEXT CHECK TIMER
-// ═══════════════════════════════════
-let lastPollTime = Date.now();
-function updateNextCheckTime() {
+// ── Countdown ─────────────────────────────────────────────────────────────
+function updateCountdown() {
   const elapsed = Date.now() - lastPollTime;
-  const remaining = Math.max(0, 120000 - elapsed);
-  const secs = Math.ceil(remaining / 1000);
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  const el = document.getElementById('nextCheckTime');
-  if (el) el.textContent = `${m}m ${s.toString().padStart(2,'0')}s`;
+  const rem = Math.max(0, checkInterval * 60000 - elapsed);
+  const s = Math.ceil(rem / 1000);
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  const el = document.getElementById('nextCheck');
+  if (el) el.textContent = `${m}m ${sec.toString().padStart(2,'0')}s`;
 }
 
-// ═══════════════════════════════════
-// SERVER HEALTH CHECK
-// ═══════════════════════════════════
-async function checkServerHealth() {
-  const dot = document.getElementById('serverDot');
-  const label = document.getElementById('serverLabel');
-  const stServer = document.getElementById('st-server');
-
+// ── Server Status ─────────────────────────────────────────────────────────
+async function checkStatus() {
   try {
-    const res = await fetch(`${API_BASE}/_health`, { signal: AbortSignal.timeout(8000) });
-    if (res.ok) {
-      serverOnline = true;
-      dot.className = 'status-dot online';
-      label.textContent = 'Server Online';
-      setBadge(stServer, 'OK', 'badge--ok');
-    } else {
-      throw new Error('Non-OK');
-    }
-  } catch {
-    serverOnline = false;
-    dot.className = 'status-dot offline';
-    label.textContent = 'Server Offline';
-    setBadge(stServer, 'OFFLINE', 'badge--offline');
-  }
-}
+    const res = await fetch(`${API}/api/status`, { signal: AbortSignal.timeout(5000) });
+    const d = await res.json();
 
-// ═══════════════════════════════════
-// LOAD CONFIG — Broadcast Settings
-// ═══════════════════════════════════
-async function loadConfig() {
-  const btn = document.getElementById('btnRefreshConfig');
-  if (btn) { btn.disabled = true; btn.textContent = '↻ Loading…'; }
+    // Header pill
+    const dot = document.getElementById('pillDot');
+    const lbl = document.getElementById('pillLabel');
+    dot.className = 'pill-dot online';
+    lbl.textContent = 'Server Online';
 
-  try {
-    const res = await fetch(`${API_BASE}/api/beu/config-status`, { signal: AbortSignal.timeout(10000) });
-    const data = await res.json();
-
-    // WhatsApp Bot status
+    // WA status
+    const waBadge = document.getElementById('waBadge');
     const stWa = document.getElementById('st-wa');
-    const stAi = document.getElementById('st-ai');
-    const stFcm = document.getElementById('st-fcm');
+    setSlBadge(stWa, waStatusText(d.waStatus), waStatusClass(d.waStatus));
+    if (waBadge) {
+      waBadge.textContent = waStatusText(d.waStatus);
+      waBadge.className = 'wa-status-badge ' + (d.waStatus === 'connected' ? 'connected' : d.waStatus === 'qr_ready' || d.waStatus === 'connecting' ? 'connecting' : '');
+    }
+    updateWaArea(d);
 
-    setBadge(stWa, data.botConnected ? 'CONNECTED' : (data.botStatus === 'initializing' ? 'STARTING' : 'OFFLINE'),
-             data.botConnected ? 'badge--ok' : 'badge--offline');
-    setBadge(stAi, data.hasGeminiKey ? 'OK' : 'NO KEY', data.hasGeminiKey ? 'badge--ok' : 'badge--offline');
-    setBadge(stFcm, 'FIREBASE OK', 'badge--ok');
+    // Other badges
+    setSlBadge(document.getElementById('st-server'), 'ONLINE', 'ok');
+    setSlBadge(document.getElementById('st-cron'), 'AUTO', 'ok');
+    setSlBadge(document.getElementById('st-auto'), d.autoDispatch ? 'ON' : 'OFF', d.autoDispatch ? 'on' : 'off');
 
-    // Toggle switches
-    const swWaCentral = document.getElementById('sw-wa-central');
-    const swWaCollege = document.getElementById('sw-wa-college');
-    const lblWaCentral = document.getElementById('lbl-wa-central');
-    const lblWaCollege = document.getElementById('lbl-wa-college');
+    // Stats
+    setText('stat-total', d.totalNotices || 0);
+    setText('stat-sent', d.sentNotices || 0);
+    setText('stat-pending', d.pendingNotices || 0);
+    setText('stat-today', d.totalSentToday || 0);
 
-    if (swWaCentral) {
-      swWaCentral.checked = !!data.autoDispatchWhatsApp;
-      lblWaCentral.textContent = data.autoDispatchWhatsApp ? 'AUTO ON' : 'OFF';
-      lblWaCentral.className = 'tr-status ' + (data.autoDispatchWhatsApp ? 'on' : 'off');
+    // Last check
+    if (d.lastCheckTime) {
+      const t = new Date(d.lastCheckTime).toLocaleTimeString('en-IN', { hour12: false });
+      setText('lastCheck', t);
     }
 
-    if (swWaCollege) {
-      swWaCollege.checked = !!data.autoDispatchCollegeNotices;
-      lblWaCollege.textContent = data.autoDispatchCollegeNotices ? 'AUTO ON' : 'OFF';
-      lblWaCollege.className = 'tr-status ' + (data.autoDispatchCollegeNotices ? 'on' : 'off');
-    }
+    checkInterval = d.checkIntervalMins || 2;
 
-    // Last check time
-    if (data.lastAutoCheck) {
-      const d = new Date(data.lastAutoCheck);
-      document.getElementById('lastCheckTime').textContent = d.toLocaleTimeString('en-IN', { hour12: false });
-    }
+    // QR poll
+    if (d.hasQr) loadQr();
 
-    showToast('✅', 'Config loaded!', 'success');
-
-  } catch (err) {
-    showToast('❌', 'Config load failed — server unreachable', 'error');
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '↻ Refresh'; }
+  } catch {
+    const dot = document.getElementById('pillDot');
+    const lbl = document.getElementById('pillLabel');
+    dot.className = 'pill-dot offline';
+    lbl.textContent = 'Server Offline';
+    setSlBadge(document.getElementById('st-server'), 'OFFLINE', 'err');
   }
 }
 
-// ═══════════════════════════════════
-// UPDATE BROADCAST SETTING
-// ═══════════════════════════════════
-async function updateBroadcastSetting(key, value) {
-  const body = {};
-  body[key] = value;
+function waStatusText(s) {
+  return { connected: 'CONNECTED', qr_ready: 'SCAN QR', connecting: 'STARTING', disconnected: 'OFFLINE' }[s] || '—';
+}
 
-  const lblKey = key === 'autoDispatchWhatsApp' ? 'lbl-wa-central' : 'lbl-wa-college';
-  const lbl = document.getElementById(lblKey);
+function waStatusClass(s) {
+  return { connected: 'ok', qr_ready: 'warn', connecting: 'warn', disconnected: 'err' }[s] || '';
+}
 
-  if (lbl) {
-    lbl.textContent = value ? 'AUTO ON' : 'OFF';
-    lbl.className = 'tr-status ' + (value ? 'on' : 'off');
+// ── WhatsApp Area ─────────────────────────────────────────────────────────
+function updateWaArea(d) {
+  const area = document.getElementById('waArea');
+  if (!area) return;
+
+  if (d.waStatus === 'connected') {
+    area.innerHTML = `
+      <div class="wa-connected">
+        <div class="wa-check">✅</div>
+        <div class="wa-conn-text">WhatsApp Connected!</div>
+        <div class="wa-conn-sub">Auto-notifications ON hain — aap so sakte ho!</div>
+        <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap;">
+          <button class="btn btn-warning btn-sm" onclick="resetScanner()">🔄 Scanner Change / Naya Number</button>
+          <button class="btn btn-ghost btn-sm" onclick="disconnectWa()">Disconnect</button>
+        </div>
+      </div>`;
+  } else if (d.waStatus === 'qr_ready') {
+    loadQr();
+  } else if (d.waStatus === 'connecting') {
+    area.innerHTML = `
+      <div class="wa-placeholder">
+        <div class="wa-icon-big">⏳</div>
+        <p class="wa-msg">WhatsApp QR code ban raha hai… thoda wait karo (5-10 sec)</p>
+        <button class="btn btn-ghost btn-sm" style="margin-top:10px;" onclick="checkStatus()">🔄 Refresh Status</button>
+      </div>`;
+  } else {
+    area.innerHTML = `
+      <div class="wa-placeholder">
+        <div class="wa-icon-big">📱</div>
+        <p class="wa-msg">Connect button dabao ya naye account ke liye Scanner Change karo</p>
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px;">
+          <button class="btn btn-primary" onclick="connectWhatsApp()">WhatsApp Connect Karo</button>
+          <button class="btn btn-warning" onclick="resetScanner()">🔄 Scanner Change (Naya QR)</button>
+        </div>
+      </div>`;
   }
+}
+
+async function loadQr() {
+  try {
+    const res = await fetch(`${API}/api/qr`);
+    const d = await res.json();
+    if (d.hasQr && d.qrDataUrl) {
+      const area = document.getElementById('waArea');
+      if (area) {
+        area.innerHTML = `
+          <div class="qr-wrap">
+            <img src="${d.qrDataUrl}" alt="WhatsApp QR Code" />
+            <div class="qr-instructions">📱 WhatsApp kholo → Linked Devices → Link a Device → QR scan karo</div>
+            <div style="display:flex;gap:10px;justify-content:center;margin-top:12px;flex-wrap:wrap;">
+              <button class="btn btn-ghost btn-sm" onclick="loadQr()">🔄 Refresh QR</button>
+              <button class="btn btn-warning btn-sm" onclick="resetScanner()">🔄 Reset / Naya QR Layein</button>
+            </div>
+          </div>`;
+      }
+    }
+  } catch {}
+}
+
+async function connectWhatsApp() {
+  const btn = document.getElementById('btnWaConnect');
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+  try {
+    await fetch(`${API}/api/wa/connect`, { method: 'POST' });
+    showToast('⏳', 'WhatsApp start ho raha hai — QR aayega…', 'warn');
+    setTimeout(checkStatus, 3000);
+    setInterval(checkStatus, 5000);
+  } catch {
+    showToast('❌', 'Connect failed', 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'WhatsApp Connect Karo'; }
+  }
+}
+
+async function resetScanner() {
+  const confirmed = confirm('Kya aap WhatsApp scanner change karna chahte hain?\n\nIsse purana session delete ho jayega aur naye WhatsApp account ko link karne ke liye naya QR code banega.');
+  if (!confirmed) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/beu/update-broadcast-settings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10000)
-    });
-
+    showToast('⏳', 'Purana session reset ho raha hai, naya QR ban raha hai...', 'warn');
+    const res = await fetch(`${API}/api/wa/reset-scanner`, { method: 'POST' });
     const data = await res.json();
     if (data.success) {
-      showToast('✅', `${key === 'autoDispatchWhatsApp' ? 'WhatsApp BEU' : 'WhatsApp Colleges'} → ${value ? 'AUTO ON' : 'OFF'}`, 'success');
+      showToast('📷', data.message || 'Naya QR generate ho raha hai...', 'ok');
+      let count = 0;
+      const pollTimer = setInterval(async () => {
+        count++;
+        await checkStatus();
+        if (count >= 8) clearInterval(pollTimer);
+      }, 2000);
     } else {
-      showToast('⚠️', 'Setting update failed. Auth required?', 'warn');
+      showToast('❌', data.message || 'Reset failed', 'err');
     }
-  } catch {
-    showToast('❌', 'Network error — setting may not have saved', 'error');
+  } catch (err) {
+    showToast('❌', 'Error: ' + err.message, 'err');
   }
 }
 
-// ═══════════════════════════════════
-// TRIGGER MANUAL BEU SYNC
-// ═══════════════════════════════════
-async function triggerSync() {
-  const btn = document.getElementById('btnSync');
-  if (!btn || btn.disabled) return;
+async function disconnectWa() {
+  try {
+    await fetch(`${API}/api/wa/disconnect`, { method: 'POST' });
+    showToast('✅', 'WhatsApp disconnected', 'ok');
+    checkStatus();
+  } catch {
+    showToast('❌', 'Disconnect failed', 'err');
+  }
+}
 
-  btn.disabled = true;
-  btn.querySelector('.ab-title').textContent = 'Syncing…';
-  btn.querySelector('.ab-icon').textContent = '⏳';
+// ── Settings ──────────────────────────────────────────────────────────────
+async function loadSettings() {
+  try {
+    const res = await fetch(`${API}/api/settings`);
+    const d = await res.json();
+    const inpId = document.getElementById('channelIdInput');
+    const inpLink = document.getElementById('channelLinkInput');
+    const togImg = document.getElementById('sendImageToggle');
+    const togAuto = document.getElementById('autoDispatchToggle');
+    if (inpId) inpId.value = d.channelId || '';
+    if (inpLink) inpLink.value = d.channelLink || '';
+    if (togImg) togImg.checked = d.sendImage !== false;
+    if (togAuto) togAuto.checked = d.autoDispatch !== false;
+  } catch {}
+}
 
-  showResult(null, null, null);
+async function saveSettings() {
+  const channelId = document.getElementById('channelIdInput')?.value.trim() || '';
+  const channelLink = document.getElementById('channelLinkInput')?.value.trim() || '';
+  const sendImage = document.getElementById('sendImageToggle')?.checked !== false;
+  const autoDispatch = document.getElementById('autoDispatchToggle')?.checked !== false;
 
   try {
-    const res = await fetch(`${API_BASE}/api/beu/sync-and-broadcast`, {
+    const res = await fetch(`${API}/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channelId, channelLink, sendImage, autoDispatch })
+    });
+    const d = await res.json();
+    if (d.success) {
+      showToast('✅', 'Settings save ho gaye!', 'ok');
+      checkStatus();
+    }
+  } catch {
+    showToast('❌', 'Save failed', 'err');
+  }
+}
+
+async function toggleSendImage(val) {
+  try {
+    await fetch(`${API}/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sendImage: val })
+    });
+    showToast(val ? '🖼️' : '📝', `Image mode: ${val ? 'ON' : 'OFF'}`, val ? 'ok' : 'warn');
+  } catch {}
+}
+
+async function toggleAutoDispatch(val) {
+  try {
+    await fetch(`${API}/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoDispatch: val })
+    });
+    showToast(val ? '✅' : '⏸️', `Auto dispatch: ${val ? 'ON' : 'OFF'}`, val ? 'ok' : 'warn');
+  } catch {}
+}
+
+// ── Sync Now ──────────────────────────────────────────────────────────────
+async function syncNow() {
+  const btn = document.getElementById('btnSync');
+  if (btn) { btn.disabled = true; btn.querySelector('.ac-title').textContent = 'Checking…'; }
+  showResult(null);
+
+  try {
+    const res = await fetch(`${API}/api/sync`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ forceAll: false }),
       signal: AbortSignal.timeout(60000)
     });
-
-    const data = await res.json();
+    const d = await res.json();
     lastPollTime = Date.now();
 
-    if (data.success) {
-      showResult('✅', 'Sync Successful!',
-        `New notices: ${data.data?.newCount ?? 0}\nAI processed: ${data.data?.aiCount ?? 0}\n${data.message || ''}`
-      , 'success');
-      showToast('✅', `Sync done! ${data.data?.newCount ?? 0} new notices.`, 'success');
+    if (d.skipped) {
+      showResult('⏳ Already checking hai — wait karo', 'warn');
+    } else if (d.success) {
+      showResult(`✅ Done!\nNew notices: ${d.newCount}\nSent: ${d.sentCount}`, 'ok');
+      showToast('✅', `Check done! ${d.newCount} new, ${d.sentCount} sent`, 'ok');
       loadNotices(true);
-      // Update stats
-      updateStatIfPresent('stat-ai', data.data?.aiCount);
     } else {
-      showResult('❌', 'Sync Failed', data.message || 'Unknown error', 'error');
-      showToast('❌', 'Sync failed!', 'error');
+      showResult(`❌ Error: ${d.error || 'Unknown'}`, 'err');
     }
   } catch (err) {
-    if (err.name === 'TimeoutError') {
-      showResult('⏳', 'Still Running…', 'Sync is taking time — check back in a minute. Server is working in background.', 'success');
-      showToast('⏳', 'Sync running in background…', 'warn');
-    } else {
-      showResult('❌', 'Network Error', err.message, 'error');
-      showToast('❌', 'Connection failed', 'error');
-    }
+    showResult(err.name === 'TimeoutError' ? '⏳ Server chal raha hai background mein…' : `❌ ${err.message}`, 'warn');
   } finally {
-    btn.disabled = false;
-    btn.querySelector('.ab-title').textContent = 'BEU Sync Now';
-    btn.querySelector('.ab-icon').textContent = '🔄';
+    if (btn) { btn.disabled = false; btn.querySelector('.ac-title').textContent = 'BEU Check Now'; }
   }
 }
 
-// ═══════════════════════════════════
-// WHATSAPP TEST
-// ═══════════════════════════════════
-async function sendTestWhatsApp() {
-  const btn = document.getElementById('btnTestWA');
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  btn.querySelector('.ab-title').textContent = 'Sending…';
+// ── Test Message ──────────────────────────────────────────────────────────
+async function sendTestMsg() {
+  const btn = document.getElementById('btnTest');
+  if (btn) { btn.disabled = true; btn.querySelector('.ac-title').textContent = 'Sending…'; }
 
   try {
-    const res = await fetch(`${API_BASE}/api/beu/whatsapp-test-post`, {
+    const res = await fetch(`${API}/api/send-custom`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(30000)
+      body: JSON.stringify({ message: '🔔 *BEU Auto Notifier — Test Message*\n\nYe ek test notification hai.\nSystem sahi kaam kar raha hai! ✅\n\n#BEU #Test' })
     });
-    const data = await res.json();
-
-    if (data.success) {
-      showResult('✅', 'WhatsApp Test Sent!', 'Test message WhatsApp Channel par bheja gaya ✅', 'success');
-      showToast('✅', 'WhatsApp test message sent!', 'success');
+    const d = await res.json();
+    if (d.success) {
+      showResult('✅ Test message WhatsApp pe bheja gaya!', 'ok');
+      showToast('✅', 'Test sent!', 'ok');
     } else {
-      showResult('❌', 'WhatsApp Send Failed', JSON.stringify(data.result || data.message, null, 2), 'error');
-      showToast('❌', 'WhatsApp send failed — bot connected?', 'error');
+      showResult(`❌ Send failed: ${d.reason || 'Unknown'}`, 'err');
+      showToast('❌', 'Send failed — WhatsApp connected hai?', 'err');
     }
   } catch (err) {
-    showResult('❌', 'Error', err.message, 'error');
-    showToast('❌', 'WhatsApp test failed', 'error');
+    showResult(`❌ ${err.message}`, 'err');
   } finally {
-    btn.disabled = false;
-    btn.querySelector('.ab-title').textContent = 'WhatsApp Test';
+    if (btn) { btn.disabled = false; btn.querySelector('.ac-title').textContent = 'Test Message'; }
   }
 }
 
-// ═══════════════════════════════════
-// BROWSER PUSH NOTIFICATION
-// ═══════════════════════════════════
-function checkBrowserPushStatus() {
-  const lbl = document.getElementById('lbl-browser-push');
-  const stBrowser = document.getElementById('st-browser');
-  const btn = document.getElementById('btnBrowserPush');
+// ── Custom Send ───────────────────────────────────────────────────────────
+async function sendCustom() {
+  const msg = document.getElementById('msgBody')?.value.trim();
+  const title = document.getElementById('msgTitle')?.value.trim();
+  const link = document.getElementById('msgLink')?.value.trim();
 
-  if (!('Notification' in window)) {
-    if (lbl) lbl.textContent = 'NOT SUPPORTED';
-    if (stBrowser) setBadge(stBrowser, 'N/A', 'badge--offline');
-    return;
-  }
-
-  if (Notification.permission === 'granted') {
-    if (lbl) { lbl.textContent = 'ENABLED'; lbl.className = 'tr-status on'; }
-    if (btn) { btn.textContent = 'Disable'; btn.className = 'btn btn--ghost btn--sm'; }
-    if (stBrowser) setBadge(stBrowser, 'ENABLED', 'badge--ok');
-  } else if (Notification.permission === 'denied') {
-    if (lbl) { lbl.textContent = 'BLOCKED'; lbl.className = 'tr-status off'; }
-    if (btn) btn.textContent = 'Blocked (Settings se enable karo)';
-    if (stBrowser) setBadge(stBrowser, 'BLOCKED', 'badge--offline');
-  } else {
-    if (lbl) { lbl.textContent = 'NOT ENABLED'; lbl.className = 'tr-status'; }
-    if (btn) { btn.textContent = 'Enable'; btn.className = 'btn btn--accent btn--sm'; }
-    if (stBrowser) setBadge(stBrowser, 'OFF', 'badge--checking');
-  }
-}
-
-async function toggleBrowserPush() {
-  if (!('Notification' in window)) {
-    showToast('❌', 'Is browser mein push notifications supported nahi hain', 'error');
-    return;
-  }
-
-  if (Notification.permission === 'granted') {
-    showToast('ℹ️', 'Browser push already enabled hai', 'warn');
-    return;
-  }
-
-  const permission = await Notification.requestPermission();
-  if (permission === 'granted') {
-    showToast('✅', 'Browser push notifications enabled!', 'success');
-    // Test notification
-    new Notification('🔔 BEU AutoNotify', {
-      body: 'Browser notifications enable ho gaye! Ab aapko BEU ki sabhi nayi notices ki notification milegi.',
-      icon: 'https://apnacollegebihar.online/favicon.ico',
-      badge: 'https://apnacollegebihar.online/favicon.ico',
-      tag: 'beu-enabled'
-    });
-  } else if (permission === 'denied') {
-    showToast('❌', 'Permission blocked — browser settings se enable karo', 'error');
-  }
-  checkBrowserPushStatus();
-}
-
-async function sendTestBrowserNotif() {
-  if (!('Notification' in window)) {
-    showToast('❌', 'Browser push supported nahi hai', 'error');
-    return;
-  }
-  if (Notification.permission !== 'granted') {
-    await toggleBrowserPush();
-    return;
-  }
-
-  new Notification('🚨 BEU Test Notification', {
-    body: 'Ye ek test notification hai — BEU AutoNotify system kaafi acha kaam kar raha hai! ✅',
-    icon: 'https://apnacollegebihar.online/favicon.ico',
-    tag: 'beu-test-' + Date.now()
-  });
-  showToast('🔔', 'Test browser notification bheja gaya!', 'success');
-}
-
-// ═══════════════════════════════════
-// CUSTOM NOTIFICATION SENDER
-// ═══════════════════════════════════
-async function sendCustomNotification() {
-  const title = document.getElementById('customTitle').value.trim();
-  const msg = document.getElementById('customMsg').value.trim();
-  const pdfUrl = document.getElementById('customPdf').value.trim();
-  const sendWA = document.getElementById('sendWA').checked;
-  const sendBrowser = document.getElementById('sendBrowser').checked;
-
-  if (!title) { showToast('⚠️', 'Title bharna zaroori hai!', 'warn'); return; }
-  if (!msg) { showToast('⚠️', 'Message likho pehle!', 'warn'); return; }
-  if (!sendWA && !sendBrowser) { showToast('⚠️', 'Kam se kam ek channel select karo!', 'warn'); return; }
+  if (!msg) { showToast('⚠️', 'Message likhna zaroori hai!', 'warn'); return; }
 
   const btn = document.getElementById('btnSendCustom');
-  btn.disabled = true;
-  btn.innerHTML = '<span>⏳</span> Bhej raha hai…';
-
-  let results = [];
-
-  // Browser Push
-  if (sendBrowser) {
-    if (Notification.permission === 'granted') {
-      new Notification(`🔔 ${title}`, {
-        body: msg.substring(0, 200),
-        icon: 'https://apnacollegebihar.online/favicon.ico',
-        tag: 'beu-custom-' + Date.now()
-      });
-      results.push('✅ Browser push notification bheja gaya');
-    } else {
-      results.push('⚠️ Browser push: permission nahi hai — pehle enable karo');
-    }
-  }
-
-  // WhatsApp
-  if (sendWA) {
-    try {
-      const fullCaption = msg + (pdfUrl ? `\n\n📄 Notice Link:\n👉 ${pdfUrl}` : '');
-      const res = await fetch(`${API_BASE}/api/beu/dispatch-whatsapp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          noticeId: 'custom_' + Date.now(),
-          caption: fullCaption,
-          title: title,
-          pdfUrl: pdfUrl || ''
-        }),
-        signal: AbortSignal.timeout(30000)
-      });
-      const data = await res.json();
-      if (data.success && data.result?.status === 'SENT') {
-        results.push('✅ WhatsApp Channel par bheja gaya');
-      } else {
-        results.push(`⚠️ WhatsApp: ${data.result?.status || 'Failed'} — ${data.result?.reason || ''}`);
-      }
-    } catch (err) {
-      results.push('❌ WhatsApp error: ' + err.message);
-    }
-  }
-
-  showResult(
-    results.every(r => r.startsWith('✅')) ? '✅' : '⚠️',
-    'Send Results',
-    results.join('\n'),
-    results.every(r => r.startsWith('✅')) ? 'success' : 'warn'
-  );
-
-  showToast(results.every(r => r.startsWith('✅')) ? '✅' : '⚠️', 'Custom notification processed!', 'success');
-
-  btn.disabled = false;
-  btn.innerHTML = '<span>🚀</span> Abhi Bhejo';
-}
-
-// ═══════════════════════════════════
-// LOAD & DISPLAY NOTICES
-// ═══════════════════════════════════
-async function loadNotices(checkForNew = false) {
-  lastPollTime = Date.now();
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Bhej raha hai…'; }
 
   try {
-    const res = await fetch(`${API_BASE}/api/beu/notices`, { signal: AbortSignal.timeout(15000) });
-    const data = await res.json();
-
-    if (!data.success) return;
-
-    const notices = (data.notices || []).slice(0, 50);
-    const newIds = new Set(notices.map(n => String(n.id)));
-
-    // Check for new notices (after initial load)
-    if (checkForNew && lastNoticeIds.size > 0) {
-      const brandNew = notices.filter(n => !lastNoticeIds.has(String(n.id)));
-      if (brandNew.length > 0) {
-        brandNew.forEach(n => {
-          showToast('🆕', `Nayi notice: ${n.title?.substring(0, 60)}…`, 'success');
-          if (Notification.permission === 'granted') {
-            new Notification('🔔 Nayi BEU Notice!', {
-              body: n.title,
-              icon: 'https://apnacollegebihar.online/favicon.ico',
-              tag: 'beu-new-' + n.id
-            });
-          }
-        });
-      }
+    const res = await fetch(`${API}/api/send-custom`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, title: title || undefined, pdfLink: link || undefined })
+    });
+    const d = await res.json();
+    if (d.success) {
+      showToast('✅', 'WhatsApp pe bheja gaya!', 'ok');
+      document.getElementById('msgBody').value = '';
+      document.getElementById('msgTitle').value = '';
+      document.getElementById('msgLink').value = '';
+      updateCount();
+    } else {
+      showToast('❌', `Failed: ${d.reason || 'Unknown'}`, 'err');
     }
-
-    lastNoticeIds = newIds;
-    noticeData = notices;
-    renderNotices(notices, checkForNew ? new Set(notices.filter(n => !lastNoticeIds.has(String(n.id))).map(n => String(n.id))) : new Set());
-
-    // Update stats
-    const total = notices.length;
-    const sent = notices.filter(n => n.whatsappDispatched).length;
-    const aiDone = notices.filter(n => n.aiProcessed).length;
-    const pending = notices.filter(n => n.aiProcessed && !n.whatsappDispatched).length;
-
-    setStatNum('stat-notices', total);
-    setStatNum('stat-sent', sent);
-    setStatNum('stat-ai', aiDone);
-    setStatNum('stat-pending', pending);
-
-    // Update last check time
-    if (data.lastAutoCheck) {
-      const d = new Date(data.lastAutoCheck);
-      const el = document.getElementById('lastCheckTime');
-      if (el) el.textContent = d.toLocaleTimeString('en-IN', { hour12: false });
-    }
-
-  } catch {
-    // Silent fail — will retry on next poll
+  } catch (err) {
+    showToast('❌', err.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🚀 WhatsApp pe Bhejo'; }
   }
 }
 
-function renderNotices(notices, newIds) {
-  const feed = document.getElementById('noticeFeed');
-  if (!feed) return;
+// ── Notice Feed ───────────────────────────────────────────────────────────
+async function loadNotices(checkNew = false) {
+  lastPollTime = Date.now();
+  try {
+    const res = await fetch(`${API}/api/notices`, { signal: AbortSignal.timeout(10000) });
+    const d = await res.json();
+    if (!d.success) return;
 
-  if (!notices.length) {
-    feed.innerHTML = '<div class="feed-loading"><span>Koi notice nahi mili abhi</span></div>';
+    const notices = d.notices || [];
+    const newSet = new Set(notices.map(n => String(n.id)));
+
+    if (checkNew && lastNoticeSet.size > 0) {
+      notices.filter(n => !lastNoticeSet.has(String(n.id))).forEach(n => {
+        showToast('🆕', `Nayi notice: ${n.title?.substring(0, 50)}…`, 'ok');
+        if (Notification.permission === 'granted') {
+          new Notification('🔔 Nayi BEU Notice!', { body: n.title });
+        }
+      });
+    }
+
+    lastNoticeSet = newSet;
+    renderNotices(notices, checkNew ? new Set(notices.filter(n => !lastNoticeSet.has(String(n.id))).map(n => String(n.id))) : new Set());
+  } catch {}
+}
+
+let noticesById = {};
+let activeModalNoticeId = null;
+
+function renderNotices(list, newIds) {
+  const el = document.getElementById('noticeList');
+  if (!el) return;
+
+  if (!list.length) {
+    el.innerHTML = '<div class="notice-loading"><span>Koi notice nahi mili abhi</span></div>';
     return;
   }
 
-  feed.innerHTML = notices.map((n, i) => {
+  noticesById = {};
+  list.forEach(n => { noticesById[String(n.id)] = n; });
+
+  el.innerHTML = list.map((n, i) => {
+    const date = n.date ? new Date(n.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '';
+    const pdfUrl = n.pdfLink || '#';
     const isNew = newIds.has(String(n.id));
-    const isCollege = !!(n.isCollegeNotice || String(n.id).startsWith('col_'));
-    const dateStr = n.date || n.noticedate || '';
-    const formattedDate = dateStr ? new Date(dateStr).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '';
-    const pdfUrl = n.pdfUrl || n.link || '#';
+    const hasImg = !!n.imageUrl;
 
     return `
-      <div class="notice-card ${isNew ? 'is-new' : ''}" onclick="window.open('${pdfUrl}', '_blank')" style="animation-delay: ${i * 30}ms" title="${n.title || ''}">
-        <div class="nc-header">
-          <span class="nc-tag">${isCollege ? '🏛 ' + (n.shortName || 'COLLEGE') : '📋 BEU PATNA'}</span>
-          <span class="nc-date">${formattedDate}</span>
+      <div class="notice-item ${isNew ? 'is-new' : ''}" style="animation-delay:${i*25}ms">
+        <div class="ni-top">
+          <span class="ni-tag">📋 BEU PATNA</span>
+          <span class="ni-date">${date}</span>
         </div>
-        <div class="nc-title">${n.title || n.board || 'BEU Notice'}</div>
-        <div class="nc-status">
-          ${n.aiProcessed ? '<span class="nc-chip">🤖 AI</span>' : ''}
-          ${n.whatsappDispatched ? '<span class="nc-chip sent">✅ WA</span>' : ''}
-          ${n.isimportant == 1 ? '<span class="nc-chip" style="background:oklch(65% 0.22 25 / 0.15);color:oklch(65% 0.22 25)">🚨 URGENT</span>' : ''}
-          ${isNew ? '<span class="nc-chip" style="background:oklch(72% 0.22 150/0.2);color:var(--color-accent)">NEW</span>' : ''}
+        <div class="ni-title" onclick="window.open('${pdfUrl}','_blank')">${n.title || 'BEU Notice'}</div>
+
+        ${hasImg ? `
+          <img class="notice-thumb" src="${n.imageUrl}" alt="Notice Preview" onclick="openImgModal('${n.id}')" title="Click to view full image" />
+        ` : ''}
+
+        <div class="ni-chips">
+          ${n.dispatched ? '<span class="chip chip-sent">✅ WA SENT</span>' : '<span class="chip chip-pending">⏳ PENDING</span>'}
+          ${n.isUrgent ? '<span class="chip chip-urgent">🚨 URGENT</span>' : ''}
+          ${hasImg ? '<span class="chip chip-ok" style="background:rgba(59,130,246,0.15);color:#2563eb;border-color:rgba(59,130,246,0.3)">🖼️ IMAGE READY</span>' : ''}
+          ${isNew ? '<span class="chip chip-new">NEW</span>' : ''}
         </div>
-      </div>
-    `;
+
+        <div class="ni-actions">
+          ${hasImg ? `
+            <button class="ni-btn ni-btn-img" onclick="openImgModal('${n.id}')">🖼️ View Image</button>
+          ` : `
+            <button class="ni-btn" onclick="generateImageForNotice('${n.id}', this)">🎨 Get Image</button>
+          `}
+          <a class="ni-btn" href="${pdfUrl}" target="_blank">📄 PDF</a>
+          <button class="ni-btn ni-btn-wa" onclick="sendSingleNotice('${n.id}', this)">🚀 Send to WA</button>
+        </div>
+      </div>`;
   }).join('');
 }
 
-// ═══════════════════════════════════
-// CHARACTER COUNT
-// ═══════════════════════════════════
-function updateCharCount() {
-  const ta = document.getElementById('customMsg');
-  const cnt = document.getElementById('charCount');
-  if (ta && cnt) cnt.textContent = ta.value.length;
+function openImgModal(id) {
+  const n = noticesById[String(id)];
+  if (!n) return;
+  activeModalNoticeId = String(id);
+
+  const modal = document.getElementById('imgModal');
+  const img = document.getElementById('modalImg');
+  const title = document.getElementById('modalTitle');
+  const downloadBtn = document.getElementById('modalDownloadBtn');
+  const pdfBtn = document.getElementById('modalPdfBtn');
+
+  if (title) title.textContent = n.title || 'Notice Preview';
+  if (img) img.src = n.imageUrl || '';
+  if (downloadBtn) {
+    downloadBtn.href = n.imageUrl || '';
+    downloadBtn.download = `BEU_Notice_${n.id}.png`;
+  }
+  if (pdfBtn) {
+    pdfBtn.href = n.pdfLink || '#';
+  }
+
+  if (modal) modal.style.display = 'flex';
 }
 
-// ═══════════════════════════════════
-// RESULT PANEL
-// ═══════════════════════════════════
-function showResult(icon, title, body, type) {
-  const panel = document.getElementById('resultPanel');
-  if (!panel) return;
-
-  if (!icon) { panel.style.display = 'none'; return; }
-
-  panel.style.display = 'block';
-  panel.className = 'result-panel ' + (type || '');
-  document.getElementById('resultIcon').textContent = icon;
-  document.getElementById('resultTitle').textContent = title;
-  document.getElementById('resultBody').textContent = body;
-
-  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+function closeImgModal(e, force = false) {
+  if (force || (e && e.target && e.target.id === 'imgModal')) {
+    const modal = document.getElementById('imgModal');
+    if (modal) modal.style.display = 'none';
+    activeModalNoticeId = null;
+  }
 }
 
-// ═══════════════════════════════════
-// TOAST
-// ═══════════════════════════════════
-function showToast(icon, message, type = 'success') {
-  const container = document.getElementById('toastContainer');
-  if (!container) return;
+async function sendNoticeFromModal() {
+  if (!activeModalNoticeId) return;
+  const btn = document.getElementById('modalSendBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Bhej raha hai...'; }
 
-  const toast = document.createElement('div');
-  toast.className = `toast ${type}`;
-  toast.innerHTML = `<span>${icon}</span><span>${message}</span>`;
-  container.appendChild(toast);
-
-  setTimeout(() => {
-    toast.classList.add('out');
-    setTimeout(() => toast.remove(), 300);
-  }, 4000);
+  await sendSingleNotice(activeModalNoticeId);
+  if (btn) { btn.disabled = false; btn.textContent = '🚀 WhatsApp pe Bhejo'; }
 }
 
-// ═══════════════════════════════════
-// HELPERS
-// ═══════════════════════════════════
-function setBadge(el, text, cls) {
+async function sendSingleNotice(id, btn = null) {
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Sending...'; }
+  try {
+    const res = await fetch(`${API}/api/notices/${id}/send`, { method: 'POST' });
+    const d = await res.json();
+    if (d.success) {
+      showToast('✅', `Notice #${id} WhatsApp pe bhej di gayi! (Image: ${d.result?.hasImage ? 'Haan' : 'Text'})`, 'ok');
+      loadNotices();
+    } else {
+      showToast('❌', `Send failed: ${d.result?.reason || d.error || 'Check connection'}`, 'err');
+    }
+  } catch (err) {
+    showToast('❌', err.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🚀 Send to WA'; }
+  }
+}
+
+async function generateImageForNotice(id, btn = null) {
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Rendering...'; }
+  showToast('⏳', `Notice #${id} ke liye image ban rahi hai...`, 'warn');
+  try {
+    const res = await fetch(`${API}/api/notices/${id}/generate-image`, { method: 'POST' });
+    const d = await res.json();
+    if (d.success) {
+      showToast('✅', `Image ready ho gayi!`, 'ok');
+      await loadNotices();
+      openImgModal(id);
+    } else {
+      showToast('❌', `Image generation failed: ${d.error || 'Error'}`, 'err');
+    }
+  } catch (err) {
+    showToast('❌', err.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🎨 Get Image'; }
+  }
+}
+
+// ── Result Box ────────────────────────────────────────────────────────────
+function showResult(text, type) {
+  const el = document.getElementById('resultBox');
+  if (!el) return;
+  if (!text) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.className = `result-box ${type || ''}`;
+  el.textContent = text;
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────
+function showToast(icon, msg, type = 'ok') {
+  const stack = document.getElementById('toastStack');
+  if (!stack) return;
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.innerHTML = `<span>${icon}</span><span>${msg}</span>`;
+  stack.appendChild(t);
+  setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 250); }, 3500);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function setSlBadge(el, text, cls) {
   if (!el) return;
   el.textContent = text;
-  el.className = `si-badge ${cls}`;
+  el.className = `sl-badge ${cls}`;
 }
 
-function setStatNum(id, val) {
+function setText(id, val) {
   const el = document.getElementById(id);
-  if (el && val !== undefined) el.textContent = val;
+  if (el) el.textContent = val;
 }
 
-function updateStatIfPresent(id, val) {
-  if (val !== undefined && val !== null) setStatNum(id, val);
+function updateCount() {
+  const ta = document.getElementById('msgBody');
+  const cnt = document.getElementById('msgCount');
+  if (ta && cnt) cnt.textContent = ta.value.length;
 }
