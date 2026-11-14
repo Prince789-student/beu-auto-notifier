@@ -64,6 +64,17 @@ let mongoDb = null;
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 });
 
+// Cloud Session Auto-Restore (Zero-QR Cloud Deployment)
+if (process.env.CREDS_BASE64 && !fs.existsSync(path.join(AUTH_FOLDER, 'creds.json'))) {
+  try {
+    const credsJson = Buffer.from(process.env.CREDS_BASE64.trim(), 'base64').toString('utf8');
+    fs.writeFileSync(path.join(AUTH_FOLDER, 'creds.json'), credsJson, 'utf8');
+    log('🔐 creds.json auto-restored from CREDS_BASE64 environment variable!');
+  } catch (e) {
+    log('⚠️ CREDS_BASE64 restore warning: ' + e.message);
+  }
+}
+
 // ─── State ─────────────────────────────────────────────────────────────────
 let waSocket = null;
 let waStatus = 'disconnected';

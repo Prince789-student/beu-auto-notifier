@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: beu-auto-notifier
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: PORT
+        value: 3001
+      - key: AUTO_DISPATCH
+        value: "true"
+      - key: AUTO_SEND_PDF
+        value: "true"
+      - key: AUTO_SEND_IMAGE
+        value: "true"
+      - key: WHATSAPP_CHANNEL_ID
+        value: "120363404823253263@newsletter"
+      - key: WHATSAPP_CHANNEL_LINK
+        value: "https://whatsapp.com/channel/0029VbC6FsH3wtb5UEDvrW0a"
+      - key: CHECK_INTERVAL_MINUTES
+        value: "2"
