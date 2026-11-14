@@ -123,10 +123,29 @@ function saveSettings(data) {
   }
 }
 
+const LOG_FILE = path.join(__dirname, 'server.log');
+
 function log(msg) {
   const t = new Date().toLocaleTimeString('en-IN', { hour12: false });
-  console.log(`[${t}] ${msg}`);
+  const line = `[${t}] ${msg}`;
+  console.log(line);
+  try {
+    if (fs.existsSync(LOG_FILE) && fs.statSync(LOG_FILE).size > 2 * 1024 * 1024) {
+      fs.writeFileSync(LOG_FILE, line + '\n', 'utf8');
+    } else {
+      fs.appendFileSync(LOG_FILE, line + '\n', 'utf8');
+    }
+  } catch {}
 }
+
+// Global exception safety to prevent background crash on network drops / socket disconnects
+process.on('uncaughtException', (err) => {
+  log(`⚠️ Uncaught Exception safely handled: ${err?.message || err}`);
+});
+
+process.on('unhandledRejection', (reason) => {
+  log(`⚠️ Unhandled Rejection safely handled: ${reason?.message || reason}`);
+});
 
 function resolveBeuLink(rawLink) {
   if (!rawLink || typeof rawLink !== 'string') return '';
@@ -838,6 +857,17 @@ app.post('/api/wa/reset-scanner', async (req, res) => {
   }, 1000);
 
   res.json({ success: true, message: 'Purana session hata diya gaya hai. Naya QR code ban raha hai...' });
+});
+
+app.get('/api/logs', (req, res) => {
+  try {
+    if (fs.existsSync(LOG_FILE)) {
+      const content = fs.readFileSync(LOG_FILE, 'utf8');
+      const lines = content.split('\n').filter(Boolean).slice(-80);
+      return res.json({ success: true, logs: lines });
+    }
+  } catch {}
+  res.json({ success: true, logs: [] });
 });
 
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));

@@ -785,9 +785,13 @@ async function generateNoticeImage(notice) {
       fs.writeFileSync(pdfPath, buffer);
       console.log(`[Notice Media] Saved official PDF: ${pdfPath} (${buffer.length} bytes)`);
 
-      // Render first page of PDF to image for channel banner preview
-      console.log(`[Notice Media] Rendering PDF to image using PDF.js (${buffer.length} bytes)...`);
-      await renderPdfToImage(buffer, imagePath);
+      // Render first page of PDF to image for channel banner preview (if Chrome available)
+      try {
+        console.log(`[Notice Media] Rendering PDF to image using PDF.js (${buffer.length} bytes)...`);
+        await renderPdfToImage(buffer, imagePath);
+      } catch (renderErr) {
+        console.warn(`[Notice Media] Image preview render skipped (Chrome not available): ${renderErr.message}`);
+      }
 
       if (fs.existsSync(imagePath) && fs.statSync(imagePath).size > 1000) {
         console.log(`[Notice Media] ✅ PDF & Image rendered successfully: ${imagePath}`);
@@ -799,6 +803,7 @@ async function generateNoticeImage(notice) {
           relativePdfUrl
         };
       } else {
+        console.log(`[Notice Media] ✅ Official PDF ready: ${pdfPath}`);
         return {
           success: true,
           imagePath: null,
