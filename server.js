@@ -916,6 +916,17 @@ async function start() {
       log('ℹ️ Dashboard se WhatsApp connect karein');
     }
   }, 1500);
+
+  // Auto Self-Ping (Built-in Keep-Alive / Uptime Bot to prevent free tier sleep)
+  const renderExternalUrl = process.env.RENDER_EXTERNAL_URL || 'https://beu-auto-notifier-x0yj.onrender.com';
+  setInterval(async () => {
+    try {
+      const resp = await axios.get(`${renderExternalUrl}/api/status`, { timeout: 10000 });
+      log(`💓 Self-Ping Keep-Alive OK: ${resp.status}`);
+    } catch (err) {
+      log(`⚠️ Self-Ping Keep-Alive error: ${err.message}`);
+    }
+  }, 5 * 60 * 1000); // Har 5 minute me ping karke server ko 24/7 active rakhega
 }
 
 start();
