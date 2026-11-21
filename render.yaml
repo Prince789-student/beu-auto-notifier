@@ -1,10 +1,9 @@
 services:
   - type: web
     name: beu-auto-notifier
-    env: node
+    env: docker
     plan: free
-    buildCommand: npm install
-    startCommand: node server.js
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: PORT
         value: 3001
@@ -20,3 +19,5 @@ services:
         value: "https://whatsapp.com/channel/0029VbC6FsH3wtb5UEDvrW0a"
       - key: CHECK_INTERVAL_MINUTES
         value: "2"
+      - key: CREDS_BASE64
+        sync: false
